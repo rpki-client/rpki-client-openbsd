@@ -830,7 +830,7 @@ sum_repostats(const struct repo *rp, const struct repostats *in, void *arg)
 }
 
 /*
- * Assign filenames ending in ".tal" in "/etc/rpki" into "tals",
+ * Assign filenames ending in ".tal" in RPKI_PATH_TAL_DIR into "tals",
  * returning the number of files found and filled-in.
  * This may be zero.
  * Don't exceed "max" filenames.
@@ -838,7 +838,7 @@ sum_repostats(const struct repo *rp, const struct repostats *in, void *arg)
 static int
 tal_load_default(void)
 {
-	static const char *confdir = "/etc/rpki";
+	static const char *confdir = RPKI_PATH_TAL_DIR;
 	int s = 0;
 	char *path;
 	DIR *dirp;
@@ -1007,7 +1007,7 @@ main(int argc, char *argv[])
 	struct pollfd	 pfd[NPFD];
 	struct msgbuf	*queues[NPFD];
 	struct ibuf	*b;
-	char		*rsync_prog = "openrsync";
+	char		*rsync_prog = RPKI_RSYNC_CMD;
 	char		*bind_addr = NULL;
 	const char	*cachedir = NULL, *outputdir = NULL;
 	const char	*errs, *name;
@@ -1030,9 +1030,9 @@ main(int argc, char *argv[])
 	if (getuid() == 0) {
 		struct passwd *pw;
 
-		pw = getpwnam("_rpki-client");
+		pw = getpwnam(RPKI_CLIENT_USER);
 		if (!pw)
-			errx(1, "no _rpki-client user to revoke to");
+			errx(1, "no %s user to revoke to", RPKI_CLIENT_USER);
 		if (setgroups(1, &pw->pw_gid) == -1 ||
 		    setresgid(pw->pw_gid, pw->pw_gid, pw->pw_gid) == -1 ||
 		    setresuid(pw->pw_uid, pw->pw_uid, pw->pw_uid) == -1)
@@ -1126,7 +1126,8 @@ main(int argc, char *argv[])
 			verbose++;
 			break;
 		case 'V':
-			fprintf(stderr, "rpki-client %s\n", RPKI_VERSION);
+			fprintf(stderr, "rpki-client-portable %s\n",
+			    RPKI_VERSION);
 			return 0;
 		case 'x':
 			experimental = 1;
@@ -1176,7 +1177,7 @@ main(int argc, char *argv[])
 	if (talsz == 0)
 		talsz = tal_load_default();
 	if (talsz == 0)
-		err(1, "no TAL files found in %s", "/etc/rpki");
+		err(1, "no TAL files found in %s", RPKI_PATH_TAL_DIR);
 
 	/* Load optional constraint files sitting next to the TALs. */
 	constraints_load();

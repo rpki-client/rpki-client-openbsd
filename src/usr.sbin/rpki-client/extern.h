@@ -1028,10 +1028,27 @@ time_t		 get_current_time(void);
 int	mkpath(const char *);
 int	mkpathat(int, const char *);
 
-#define RPKI_PATH_OUT_DIR	"/var/db/rpki-client"
-#define RPKI_PATH_BASE_DIR	"/var/cache/rpki-client"
+#ifndef RPKI_PATH_TAL_DIR
+#define RPKI_PATH_TAL_DIR	"/etc/rpki"
+#endif
 
-#define DEFAULT_SKIPLIST_FILE	"/etc/rpki/skiplist"
+#ifndef RPKI_PATH_OUT_DIR
+#define RPKI_PATH_OUT_DIR	"/var/db/rpki-client"
+#endif
+
+#ifndef RPKI_PATH_BASE_DIR
+#define RPKI_PATH_BASE_DIR	"/var/cache/rpki-client"
+#endif
+
+#ifndef RPKI_CLIENT_USER
+#define RPKI_CLIENT_USER	"_rpki-client"
+#endif
+
+#ifndef RPKI_RSYNC_CMD
+#define RPKI_RSYNC_CMD		"openrsync"
+#endif
+
+#define DEFAULT_SKIPLIST_FILE	RPKI_PATH_TAL_DIR "/skiplist"
 
 /* Interval in which random reinitialization to an RRDP snapshot happens. */
 #define RRDP_RANDOM_REINIT_MAX	12 /* weeks */
