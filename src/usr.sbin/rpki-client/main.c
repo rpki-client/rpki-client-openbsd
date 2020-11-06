@@ -1168,7 +1168,8 @@ main(int argc, char *argv[])
 		if ((outdirfd = open(outputdir, O_RDONLY | O_DIRECTORY)) == -1)
 			err(1, "output directory %s", outputdir);
 		if (outformats == 0)
-			outformats = FORMAT_OPENBGPD;
+			outformats = FORMAT_OPENBGPD | FORMAT_JSON |
+			    FORMAT_CSV | FORMAT_BIRD | FORMAT_OMETRIC;
 		outformats |= FORMAT_CCR;
 	}
 
