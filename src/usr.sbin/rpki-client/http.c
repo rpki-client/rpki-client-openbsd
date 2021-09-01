@@ -64,6 +64,9 @@
 #include <vis.h>
 #include <zlib.h>
 
+#ifndef HAVE_PLEDGE
+#include <openssl/x509.h>
+#endif
 #include <tls.h>
 
 #include "extern.h"
@@ -167,8 +170,10 @@ static unsigned int		http_conn_count;
 static struct msgbuf *msgq;
 static struct sockaddr_storage http_bindaddr;
 static struct tls_config *tls_config;
+#ifdef HAVE_PLEDGE
 static uint8_t *tls_ca_mem;
 static size_t tls_ca_size;
+#endif
 
 /* HTTP request API */
 static void	http_req_new(unsigned int, char *, char *, int, int);
@@ -2036,12 +2041,23 @@ http_setup(void)
 		    tls_config_error(tls_config));
 #endif
 
+#ifdef HAVE_PLEDGE
 	/* load cert file from disk now */
 	tls_ca_mem = tls_load_file(tls_default_ca_cert_file(),
 	    &tls_ca_size, NULL);
 	if (tls_ca_mem == NULL)
 		err(1, "tls_load_file: %s", tls_default_ca_cert_file());
 	tls_config_set_ca_mem(tls_config, tls_ca_mem, tls_ca_size);
+#endif
+#ifdef HAVE_LANDLOCK
+	/*
+	 * GROSS HACK: landlock has no concept of dns pledge and on top
+	 * of this libretls/OpenSSL don't support loading certs into memory.
+	 * Only solution is to give read access to the hole world.
+	 * Yes, this is a giant hole but landlock is just not fit for use.
+	 */
+	unveil("/", "r");
+#endif
 
 	if ((httpproxy = getenv("http_proxy")) != NULL && *httpproxy == '\0')
 		httpproxy = NULL;
