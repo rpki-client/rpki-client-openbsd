@@ -1,4 +1,4 @@
-/*	$OpenBSD: mft.c,v 1.38 2021/09/09 14:15:49 claudio Exp $ */
+/*	$OpenBSD: mft.c,v 1.38.4.1 2021/11/09 13:40:32 benno Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -228,6 +228,12 @@ mft_parse_flist(struct parse *p, const ASN1_OCTET_STRING *os)
 		goto out;
 	}
 
+	if (sk_ASN1_TYPE_num(seq) > MAX_MANIFEST_ENTRIES) {
+		warnx("%s: %d exceeds manifest entry limit (%d)", p->fn,
+		    sk_ASN1_TYPE_num(seq), MAX_MANIFEST_ENTRIES);
+		goto out;
+	}
+
 	p->res->files = calloc(sk_ASN1_TYPE_num(seq), sizeof(struct mftfile));
 	if (p->res->files == NULL)
 		err(1, NULL);
@@ -244,7 +250,7 @@ mft_parse_flist(struct parse *p, const ASN1_OCTET_STRING *os)
 	}
 
 	rc = 1;
-out:
+ out:
 	sk_ASN1_TYPE_pop_free(seq, ASN1_TYPE_free);
 	return rc;
 }
@@ -409,7 +415,7 @@ out:
  * The MFT content is otherwise returned.
  */
 struct mft *
-mft_parse(X509 **x509, const char *fn)
+mft_parse(X509 **x509, const char *fn, const unsigned char *der, size_t len)
 {
 	struct parse	 p;
 	int		 c, rc = 0;
@@ -426,7 +432,7 @@ mft_parse(X509 **x509, const char *fn)
 			    "1.2.840.113549.1.9.16.1.26");
 	}
 
-	cms = cms_parse_validate(x509, fn, mft_oid, &cmsz);
+	cms = cms_parse_validate(x509, fn, der, len, mft_oid, &cmsz);
 	if (cms == NULL)
 		return NULL;
 	assert(*x509 != NULL);
@@ -489,7 +495,7 @@ mft_check(const char *fn, struct mft *p)
 {
 	size_t	i;
 	int	rc = 1;
-	char	*cp, *path = NULL;
+	char	*cp, *h, *path = NULL;
 
 	/* Check hash of file now, but first build path for it */
 	cp = strrchr(fn, '/');
@@ -498,6 +504,13 @@ mft_check(const char *fn, struct mft *p)
 
 	for (i = 0; i < p->filesz; i++) {
 		const struct mftfile *m = &p->files[i];
+		if (!valid_filename(m->file)) {
+			if (base64_encode(m->hash, sizeof(m->hash), &h) == -1)
+				errx(1, "base64_encode failed in %s", __func__);
+			warnx("%s: unsupported filename for %s", fn, h);
+			free(h);
+			continue;
+		}
 		if (asprintf(&path, "%.*s/%s", (int)(cp - fn), fn,
 		    m->file) == -1)
 			err(1, NULL);
@@ -564,7 +577,7 @@ mft_buffer(struct ibuf *b, const struct mft *p)
  * Result must be passed to mft_free().
  */
 struct mft *
-mft_read(int fd)
+mft_read(struct ibuf *b)
 {
 	struct mft	*p = NULL;
 	size_t		 i;
@@ -572,22 +585,22 @@ mft_read(int fd)
 	if ((p = calloc(1, sizeof(struct mft))) == NULL)
 		err(1, NULL);
 
-	io_simple_read(fd, &p->stale, sizeof(int));
-	io_str_read(fd, &p->file);
-	assert(p->file);
-	io_simple_read(fd, &p->filesz, sizeof(size_t));
+	io_read_buf(b, &p->stale, sizeof(int));
+	io_read_str(b, &p->file);
+	io_read_buf(b, &p->filesz, sizeof(size_t));
 
+	assert(p->file);
 	if ((p->files = calloc(p->filesz, sizeof(struct mftfile))) == NULL)
 		err(1, NULL);
 
 	for (i = 0; i < p->filesz; i++) {
-		io_str_read(fd, &p->files[i].file);
-		io_simple_read(fd, p->files[i].hash, SHA256_DIGEST_LENGTH);
+		io_read_str(b, &p->files[i].file);
+		io_read_buf(b, p->files[i].hash, SHA256_DIGEST_LENGTH);
 	}
 
-	io_str_read(fd, &p->aia);
-	io_str_read(fd, &p->aki);
-	io_str_read(fd, &p->ski);
+	io_read_str(b, &p->aia);
+	io_read_str(b, &p->aki);
+	io_read_str(b, &p->ski);
 	assert(p->aia && p->aki && p->ski);
 
 	return p;

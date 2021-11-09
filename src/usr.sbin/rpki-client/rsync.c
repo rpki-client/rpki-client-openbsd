@@ -1,4 +1,4 @@
-/*	$OpenBSD: rsync.c,v 1.25 2021/09/01 12:26:26 claudio Exp $ */
+/*	$OpenBSD: rsync.c,v 1.25.4.1 2021/11/09 13:40:32 benno Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -32,6 +32,9 @@
 #include <imsg.h>
 
 #include "extern.h"
+
+#define	__STRINGIFY(x)	#x
+#define	STRINGIFY(x)	__STRINGIFY(x)
 
 /*
  * A running rsync process.
@@ -116,10 +119,11 @@ proc_child(int signal)
 void
 proc_rsync(char *prog, char *bind_addr, int fd)
 {
-	size_t			 i, idsz = 0;
+	size_t			 i, idsz = 0, nprocs = 0;
 	int			 rc = 0;
 	struct pollfd		 pfd;
 	struct msgbuf		 msgq;
+	struct ibuf		*b, *inbuf = NULL;
 	sigset_t		 mask, oldmask;
 	struct rsyncproc	*ids = NULL;
 
@@ -178,12 +182,13 @@ proc_rsync(char *prog, char *bind_addr, int fd)
 
 	for (;;) {
 		char *uri = NULL, *dst = NULL;
-		ssize_t ssz;
 		size_t id;
 		pid_t pid;
 		int st;
 
-		pfd.events = POLLIN;
+		pfd.events = 0;
+		if (nprocs < MAX_RSYNC_PROCESSES)
+			pfd.events |= POLLIN;
 		if (msgq.queued)
 			pfd.events |= POLLOUT;
 
@@ -199,7 +204,6 @@ proc_rsync(char *prog, char *bind_addr, int fd)
 			 */
 
 			while ((pid = waitpid(WAIT_ANY, &st, WNOHANG)) > 0) {
-				struct ibuf *b;
 				int ok = 1;
 
 				for (i = 0; i < idsz; i++)
@@ -217,17 +221,16 @@ proc_rsync(char *prog, char *bind_addr, int fd)
 					ok = 0;
 				}
 
-				b = ibuf_open(sizeof(size_t) + sizeof(ok));
-				if (b == NULL)
-					err(1, NULL);
+				b = io_new_buffer();
 				io_simple_buffer(b, &ids[i].id, sizeof(size_t));
 				io_simple_buffer(b, &ok, sizeof(ok));
-				ibuf_close(&msgq, b);
+				io_close_buffer(&msgq, b);
 
 				free(ids[i].uri);
 				ids[i].uri = NULL;
 				ids[i].pid = 0;
 				ids[i].id = 0;
+				nprocs--;
 			}
 			if (pid == -1 && errno != ECHILD)
 				err(1, "waitpid");
@@ -243,23 +246,24 @@ proc_rsync(char *prog, char *bind_addr, int fd)
 			}
 		}
 
+		/* connection closed */
+		if (pfd.revents & POLLHUP)
+			break;
+
 		if (!(pfd.revents & POLLIN))
 			continue;
 
-		/*
-		 * Read til the parent exits.
-		 * That will mean that we can safely exit.
-		 */
-
-		if ((ssz = read(fd, &id, sizeof(size_t))) == -1)
-			err(1, "read");
-		if (ssz == 0)
-			break;
+		b = io_buf_read(fd, &inbuf);
+		if (b == NULL)
+			continue;
 
 		/* Read host and module. */
+		io_read_buf(b, &id, sizeof(id));
+		io_read_str(b, &dst);
+		io_read_str(b, &uri);
 
-		io_str_read(fd, &dst);
-		io_str_read(fd, &uri);
+		ibuf_free(b);
+
 		assert(dst);
 		assert(uri);
 
@@ -277,6 +281,7 @@ proc_rsync(char *prog, char *bind_addr, int fd)
 			args[i++] = (char *)prog;
 			args[i++] = "-rt";
 			args[i++] = "--no-motd";
+			args[i++] = "--max-size=" STRINGIFY(MAX_FILE_SIZE);
 			args[i++] = "--timeout=180";
 			args[i++] = "--include=*/";
 			args[i++] = "--include=*.cer";
@@ -312,6 +317,7 @@ proc_rsync(char *prog, char *bind_addr, int fd)
 		ids[i].id = id;
 		ids[i].pid = pid;
 		ids[i].uri = uri;
+		nprocs++;
 
 		/* Clean up temporary values. */
 

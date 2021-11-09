@@ -1,4 +1,4 @@
-/*	$OpenBSD: roa.c,v 1.25 2021/09/09 14:15:49 claudio Exp $ */
+/*	$OpenBSD: roa.c,v 1.25.4.1 2021/11/09 13:40:32 benno Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -327,7 +327,7 @@ out:
  * Returns the ROA or NULL if the document was malformed.
  */
 struct roa *
-roa_parse(X509 **x509, const char *fn)
+roa_parse(X509 **x509, const char *fn, const unsigned char *der, size_t len)
 {
 	struct parse	 p;
 	size_t		 cmsz;
@@ -348,7 +348,7 @@ roa_parse(X509 **x509, const char *fn)
 			    "1.2.840.113549.1.9.16.1.24");
 	}
 
-	cms = cms_parse_validate(x509, fn, roa_oid, &cmsz);
+	cms = cms_parse_validate(x509, fn, der, len, roa_oid, &cmsz);
 	if (cms == NULL)
 		return NULL;
 
@@ -374,12 +374,11 @@ roa_parse(X509 **x509, const char *fn)
 		warnx("%s: ASN1_time_parse failed", fn);
 		goto out;
 	}
-	if ((expires = mktime(&expires_tm)) == -1) {
-		err(1, "mktime failed");
-		goto out;
-	}
+	if ((expires = mktime(&expires_tm)) == -1)
+		errx(1, "mktime failed");
+
 	p.res->expires = expires;
-	
+
 	if (!roa_parse_econtent(cms, cmsz, &p))
 		goto out;
 
@@ -410,7 +409,6 @@ roa_free(struct roa *p)
 	free(p->aki);
 	free(p->ski);
 	free(p->ips);
-	free(p->tal);
 	free(p);
 }
 
@@ -421,25 +419,17 @@ roa_free(struct roa *p)
 void
 roa_buffer(struct ibuf *b, const struct roa *p)
 {
-	size_t	 i;
+	io_simple_buffer(b, &p->valid, sizeof(p->valid));
+	io_simple_buffer(b, &p->asid, sizeof(p->asid));
+	io_simple_buffer(b, &p->talid, sizeof(p->talid));
+	io_simple_buffer(b, &p->ipsz, sizeof(p->ipsz));
+	io_simple_buffer(b, &p->expires, sizeof(p->expires));
 
-	io_simple_buffer(b, &p->valid, sizeof(int));
-	io_simple_buffer(b, &p->asid, sizeof(uint32_t));
-	io_simple_buffer(b, &p->ipsz, sizeof(size_t));
-	io_simple_buffer(b, &p->expires, sizeof(time_t));
-
-	for (i = 0; i < p->ipsz; i++) {
-		io_simple_buffer(b, &p->ips[i].afi, sizeof(enum afi));
-		io_simple_buffer(b, &p->ips[i].maxlength, sizeof(size_t));
-		io_simple_buffer(b, p->ips[i].min, sizeof(p->ips[i].min));
-		io_simple_buffer(b, p->ips[i].max, sizeof(p->ips[i].max));
-		ip_addr_buffer(b, &p->ips[i].addr);
-	}
+	io_simple_buffer(b, p->ips, p->ipsz * sizeof(p->ips[0]));
 
 	io_str_buffer(b, p->aia);
 	io_str_buffer(b, p->aki);
 	io_str_buffer(b, p->ski);
-	io_str_buffer(b, p->tal);
 }
 
 /*
@@ -448,35 +438,27 @@ roa_buffer(struct ibuf *b, const struct roa *p)
  * Result must be passed to roa_free().
  */
 struct roa *
-roa_read(int fd)
+roa_read(struct ibuf *b)
 {
 	struct roa	*p;
-	size_t		 i;
 
 	if ((p = calloc(1, sizeof(struct roa))) == NULL)
 		err(1, NULL);
 
-	io_simple_read(fd, &p->valid, sizeof(int));
-	io_simple_read(fd, &p->asid, sizeof(uint32_t));
-	io_simple_read(fd, &p->ipsz, sizeof(size_t));
-	io_simple_read(fd, &p->expires, sizeof(time_t));
+	io_read_buf(b, &p->valid, sizeof(p->valid));
+	io_read_buf(b, &p->asid, sizeof(p->asid));
+	io_read_buf(b, &p->talid, sizeof(p->talid));
+	io_read_buf(b, &p->ipsz, sizeof(p->ipsz));
+	io_read_buf(b, &p->expires, sizeof(p->expires));
 
 	if ((p->ips = calloc(p->ipsz, sizeof(struct roa_ip))) == NULL)
 		err(1, NULL);
+	io_read_buf(b, p->ips, p->ipsz * sizeof(p->ips[0]));
 
-	for (i = 0; i < p->ipsz; i++) {
-		io_simple_read(fd, &p->ips[i].afi, sizeof(enum afi));
-		io_simple_read(fd, &p->ips[i].maxlength, sizeof(size_t));
-		io_simple_read(fd, &p->ips[i].min, sizeof(p->ips[i].min));
-		io_simple_read(fd, &p->ips[i].max, sizeof(p->ips[i].max));
-		ip_addr_read(fd, &p->ips[i].addr);
-	}
-
-	io_str_read(fd, &p->aia);
-	io_str_read(fd, &p->aki);
-	io_str_read(fd, &p->ski);
-	io_str_read(fd, &p->tal);
-	assert(p->aia && p->aki && p->ski && p->tal);
+	io_read_str(b, &p->aia);
+	io_read_str(b, &p->aki);
+	io_read_str(b, &p->ski);
+	assert(p->aia && p->aki && p->ski);
 
 	return p;
 }
@@ -500,8 +482,7 @@ roa_insert_vrps(struct vrp_tree *tree, struct roa *roa, size_t *vrps,
 		v->addr = roa->ips[i].addr;
 		v->maxlength = roa->ips[i].maxlength;
 		v->asid = roa->asid;
-		if ((v->tal = strdup(roa->tal)) == NULL)
-			err(1, NULL);
+		v->talid = roa->talid;
 		v->expires = roa->expires;
 
 		/*
@@ -513,12 +494,9 @@ roa_insert_vrps(struct vrp_tree *tree, struct roa *roa, size_t *vrps,
 			/* already exists */
 			if (found->expires < v->expires) {
 				/* update found with preferred data */
-				found->expires = roa->expires;
-				free(found->tal);
-				found->tal = v->tal;
-				v->tal = NULL;
+				found->talid = v->talid;
+				found->expires = v->expires;
 			}
-			free(v->tal);
 			free(v);
 		} else
 			(*uniqs)++;
