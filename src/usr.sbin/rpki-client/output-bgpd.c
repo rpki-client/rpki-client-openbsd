@@ -1,4 +1,4 @@
-/*	$OpenBSD: output-bgpd.c,v 1.22 2021/09/01 15:21:10 job Exp $ */
+/*	$OpenBSD: output-bgpd.c,v 1.22.4.1 2021/11/09 13:40:32 benno Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -20,7 +20,8 @@
 #include "extern.h"
 
 int
-output_bgpd(FILE *out, struct vrp_tree *vrps, struct stats *st)
+output_bgpd(FILE *out, struct vrp_tree *vrps, struct brk_tree *brks,
+    struct stats *st)
 {
 	struct vrp	*v;
 

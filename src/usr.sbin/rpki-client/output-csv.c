@@ -1,4 +1,4 @@
-/*	$OpenBSD: output-csv.c,v 1.10 2021/05/06 17:03:57 job Exp $ */
+/*	$OpenBSD: output-csv.c,v 1.10.4.1 2021/11/09 13:40:32 benno Exp $ */
 /*
  * Copyright (c) 2019 Claudio Jeker <claudio@openbsd.org>
  *
@@ -20,7 +20,8 @@
 #include "extern.h"
 
 int
-output_csv(FILE *out, struct vrp_tree *vrps, struct stats *st)
+output_csv(FILE *out, struct vrp_tree *vrps, struct brk_tree *brks,
+    struct stats *st)
 {
 	struct vrp	*v;
 
@@ -33,7 +34,8 @@ output_csv(FILE *out, struct vrp_tree *vrps, struct stats *st)
 		ip_addr_print(&v->addr, v->afi, buf, sizeof(buf));
 
 		if (fprintf(out, "AS%u,%s,%u,%s,%lld\n", v->asid, buf,
-		    v->maxlength, v->tal, (long long)v->expires) < 0)
+		    v->maxlength, taldescs[v->talid],
+		    (long long)v->expires) < 0)
 			return -1;
 	}
 	return 0;

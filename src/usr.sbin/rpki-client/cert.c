@@ -1,5 +1,6 @@
-/*	$OpenBSD: cert.c,v 1.32 2021/09/09 14:15:49 claudio Exp $ */
+/*	$OpenBSD: cert.c,v 1.32.4.1 2021/11/09 13:40:32 benno Exp $ */
 /*
+ * Copyright (c) 2021 Job Snijders <job@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
  * Permission to use, copy, modify, and distribute this software for any
@@ -79,6 +80,8 @@ append_ip(struct parse *p, const struct cert_ip *ip)
 
 	if (!ip_addr_check_overlap(ip, p->fn, p->res->ips, p->res->ipsz))
 		return 0;
+	if (res->ipsz >= MAX_IP_SIZE)
+		return 0;
 	res->ips = reallocarray(res->ips, res->ipsz + 1,
 	    sizeof(struct cert_ip));
 	if (res->ips == NULL)
@@ -97,6 +100,8 @@ append_as(struct parse *p, const struct cert_as *as)
 {
 
 	if (!as_check_overlap(as, p->fn, p->res->as, p->res->asz))
+		return 0;
+	if (p->res->asz >= MAX_AS_SIZE)
 		return 0;
 	p->res->as = reallocarray(p->res->as, p->res->asz + 1,
 	    sizeof(struct cert_as));
@@ -975,36 +980,29 @@ out:
  * is also dereferenced.
  */
 static struct cert *
-cert_parse_inner(X509 **xp, const char *fn, int ta)
+cert_parse_inner(X509 **xp, const char *fn, const unsigned char *der,
+    size_t len, int ta)
 {
 	int		 rc = 0, extsz, c;
+	int		 sia_present = 0;
 	size_t		 i;
 	X509		*x = NULL;
 	X509_EXTENSION	*ext = NULL;
 	ASN1_OBJECT	*obj;
 	struct parse	 p;
-	BIO		*bio = NULL;
-	FILE		*f;
 
 	*xp = NULL;
 
-	if ((f = fopen(fn, "rb")) == NULL) {
-		warn("%s", fn);
+	/* just fail for empty buffers, the warning was printed elsewhere */
+	if (der == NULL)
 		return NULL;
-	}
-
-	if ((bio = BIO_new_fp(f, BIO_CLOSE)) == NULL) {
-		if (verbose > 0)
-			cryptowarnx("%s: BIO_new_file", fn);
-		return NULL;
-	}
 
 	memset(&p, 0, sizeof(struct parse));
 	p.fn = fn;
 	if ((p.res = calloc(1, sizeof(struct cert))) == NULL)
 		err(1, NULL);
 
-	if ((x = *xp = d2i_X509_bio(bio, NULL)) == NULL) {
+	if ((x = *xp = d2i_X509(NULL, &der, len)) == NULL) {
 		cryptowarnx("%s: d2i_X509_bio", p.fn);
 		goto out;
 	}
@@ -1029,6 +1027,7 @@ cert_parse_inner(X509 **xp, const char *fn, int ta)
 			c = sbgp_assysnum(&p, ext);
 			break;
 		case NID_sinfo_access:
+			sia_present = 1;
 			c = sbgp_sia(&p, ext);
 			break;
 		case NID_crl_distribution_points:
@@ -1039,6 +1038,8 @@ cert_parse_inner(X509 **xp, const char *fn, int ta)
 		case NID_authority_key_identifier:
 			break;
 		case NID_subject_key_identifier:
+			break;
+		case NID_ext_key_usage:
 			break;
 		default:
 			/* {
@@ -1059,12 +1060,52 @@ cert_parse_inner(X509 **xp, const char *fn, int ta)
 		p.res->aia = x509_get_aia(x, p.fn);
 		p.res->crl = x509_get_crl(x, p.fn);
 	}
+	if (!x509_get_expire(x, p.fn, &p.res->expires))
+		goto out;
+	p.res->purpose = x509_get_purpose(x, p.fn);
 
 	/* Validation on required fields. */
 
+	switch (p.res->purpose) {
+	case CERT_PURPOSE_CA:
+		if (p.res->mft == NULL) {
+			warnx("%s: RFC 6487 section 4.8.8: missing SIA", p.fn);
+			goto out;
+		}
+		if (p.res->asz == 0 && p.res->ipsz == 0) {
+			warnx("%s: missing IP or AS resources", p.fn);
+			goto out;
+		}
+		break;
+	case CERT_PURPOSE_BGPSEC_ROUTER:
+		p.res->pubkey = x509_get_pubkey(x, p.fn);
+		if (p.res->pubkey == NULL) {
+			warnx("%s: x509_get_pubkey failed", p.fn);
+			goto out;
+		}
+		if (p.res->ipsz > 0) {
+			warnx("%s: unexpected IP resources in BGPsec cert",
+			   p.fn);
+			goto out;
+		}
+		if (sia_present) {
+			warnx("%s: unexpected SIA extension in BGPsec cert",
+			   p.fn);
+			goto out;
+		}
+		if (ta) {
+			warnx("%s: BGPsec cert can not be a trust anchor",
+			   p.fn);
+			goto out;
+		}
+		break;
+	default:
+		warnx("%s: x509_get_purpose failed in %s", p.fn, __func__);
+		goto out;
+	}
+
 	if (p.res->ski == NULL) {
-		warnx("%s: RFC 6487 section 8.4.2: "
-		    "missing SKI", p.fn);
+		warnx("%s: RFC 6487 section 8.4.2: missing SKI", p.fn);
 		goto out;
 	}
 
@@ -1100,25 +1141,13 @@ cert_parse_inner(X509 **xp, const char *fn, int ta)
 		goto out;
 	}
 
-	if (p.res->asz == 0 && p.res->ipsz == 0) {
-		warnx("%s: RFC 6487 section 4.8.10 and 4.8.11: "
-		    "missing IP or AS resources", p.fn);
-		goto out;
-	}
-
-	if (p.res->mft == NULL) {
-		warnx("%s: RFC 6487 section 4.8.8: "
-		    "missing SIA", p.fn);
-		goto out;
-	}
 	if (X509_up_ref(x) == 0)
-		errx(1, "king bula");
+		errx(1, "%s: X509_up_ref failed", __func__);
 
 	p.res->x509 = x;
 
 	rc = 1;
 out:
-	BIO_free_all(bio);
 	if (rc == 0) {
 		cert_free(p.res);
 		X509_free(x);
@@ -1128,19 +1157,20 @@ out:
 }
 
 struct cert *
-cert_parse(X509 **xp, const char *fn)
+cert_parse(X509 **xp, const char *fn, const unsigned char *der, size_t len)
 {
-	return cert_parse_inner(xp, fn, 0);
+	return cert_parse_inner(xp, fn, der, len, 0);
 }
 
 struct cert *
-ta_parse(X509 **xp, const char *fn, const unsigned char *pkey, size_t pkeysz)
+ta_parse(X509 **xp, const char *fn, const unsigned char *der, size_t len,
+    const unsigned char *pkey, size_t pkeysz)
 {
 	EVP_PKEY	*pk = NULL, *opk = NULL;
 	struct cert	*p;
 	int		 rc = 0;
 
-	if ((p = cert_parse_inner(xp, fn, 1)) == NULL)
+	if ((p = cert_parse_inner(xp, fn, der, len, 1)) == NULL)
 		return NULL;
 
 	if (pkey != NULL) {
@@ -1190,36 +1220,9 @@ cert_free(struct cert *p)
 	free(p->aia);
 	free(p->aki);
 	free(p->ski);
+	free(p->pubkey);
 	X509_free(p->x509);
 	free(p);
-}
-
-static void
-cert_ip_buffer(struct ibuf *b, const struct cert_ip *p)
-{
-	io_simple_buffer(b, &p->afi, sizeof(enum afi));
-	io_simple_buffer(b, &p->type, sizeof(enum cert_ip_type));
-
-	if (p->type != CERT_IP_INHERIT) {
-		io_simple_buffer(b, &p->min, sizeof(p->min));
-		io_simple_buffer(b, &p->max, sizeof(p->max));
-	}
-
-	if (p->type == CERT_IP_RANGE)
-		ip_addr_range_buffer(b, &p->range);
-	else if (p->type == CERT_IP_ADDR)
-		ip_addr_buffer(b, &p->ip);
-}
-
-static void
-cert_as_buffer(struct ibuf *b, const struct cert_as *p)
-{
-	io_simple_buffer(b, &p->type, sizeof(enum cert_as_type));
-	if (p->type == CERT_AS_RANGE) {
-		io_simple_buffer(b, &p->range.min, sizeof(uint32_t));
-		io_simple_buffer(b, &p->range.max, sizeof(uint32_t));
-	} else if (p->type == CERT_AS_ID)
-		io_simple_buffer(b, &p->id, sizeof(uint32_t));
 }
 
 /*
@@ -1229,16 +1232,14 @@ cert_as_buffer(struct ibuf *b, const struct cert_as *p)
 void
 cert_buffer(struct ibuf *b, const struct cert *p)
 {
-	size_t	 i;
+	io_simple_buffer(b, &p->expires, sizeof(p->expires));
+	io_simple_buffer(b, &p->purpose, sizeof(p->purpose));
+	io_simple_buffer(b, &p->talid, sizeof(p->talid));
+	io_simple_buffer(b, &p->ipsz, sizeof(p->ipsz));
+	io_simple_buffer(b, &p->asz, sizeof(p->asz));
 
-	io_simple_buffer(b, &p->valid, sizeof(int));
-	io_simple_buffer(b, &p->ipsz, sizeof(size_t));
-	for (i = 0; i < p->ipsz; i++)
-		cert_ip_buffer(b, &p->ips[i]);
-
-	io_simple_buffer(b, &p->asz, sizeof(size_t));
-	for (i = 0; i < p->asz; i++)
-		cert_as_buffer(b, &p->as[i]);
+	io_simple_buffer(b, p->ips, p->ipsz * sizeof(p->ips[0]));
+	io_simple_buffer(b, p->as, p->asz * sizeof(p->as[0]));
 
 	io_str_buffer(b, p->mft);
 	io_str_buffer(b, p->notify);
@@ -1247,36 +1248,7 @@ cert_buffer(struct ibuf *b, const struct cert *p)
 	io_str_buffer(b, p->aia);
 	io_str_buffer(b, p->aki);
 	io_str_buffer(b, p->ski);
-}
-
-static void
-cert_ip_read(int fd, struct cert_ip *p)
-{
-
-	io_simple_read(fd, &p->afi, sizeof(enum afi));
-	io_simple_read(fd, &p->type, sizeof(enum cert_ip_type));
-
-	if (p->type != CERT_IP_INHERIT) {
-		io_simple_read(fd, &p->min, sizeof(p->min));
-		io_simple_read(fd, &p->max, sizeof(p->max));
-	}
-
-	if (p->type == CERT_IP_RANGE)
-		ip_addr_range_read(fd, &p->range);
-	else if (p->type == CERT_IP_ADDR)
-		ip_addr_read(fd, &p->ip);
-}
-
-static void
-cert_as_read(int fd, struct cert_as *p)
-{
-
-	io_simple_read(fd, &p->type, sizeof(enum cert_as_type));
-	if (p->type == CERT_AS_RANGE) {
-		io_simple_read(fd, &p->range.min, sizeof(uint32_t));
-		io_simple_read(fd, &p->range.max, sizeof(uint32_t));
-	} else if (p->type == CERT_AS_ID)
-		io_simple_read(fd, &p->id, sizeof(uint32_t));
+	io_str_buffer(b, p->pubkey);
 }
 
 /*
@@ -1285,39 +1257,40 @@ cert_as_read(int fd, struct cert_as *p)
  * Always returns a valid pointer.
  */
 struct cert *
-cert_read(int fd)
+cert_read(struct ibuf *b)
 {
 	struct cert	*p;
-	size_t		 i;
 
 	if ((p = calloc(1, sizeof(struct cert))) == NULL)
 		err(1, NULL);
 
-	io_simple_read(fd, &p->valid, sizeof(int));
-	io_simple_read(fd, &p->ipsz, sizeof(size_t));
+	io_read_buf(b, &p->expires, sizeof(p->expires));
+	io_read_buf(b, &p->purpose, sizeof(p->purpose));
+	io_read_buf(b, &p->talid, sizeof(p->talid));
+	io_read_buf(b, &p->ipsz, sizeof(p->ipsz));
+	io_read_buf(b, &p->asz, sizeof(p->asz));
+
 	p->ips = calloc(p->ipsz, sizeof(struct cert_ip));
 	if (p->ips == NULL)
 		err(1, NULL);
-	for (i = 0; i < p->ipsz; i++)
-		cert_ip_read(fd, &p->ips[i]);
+	io_read_buf(b, p->ips, p->ipsz * sizeof(p->ips[0]));
 
-	io_simple_read(fd, &p->asz, sizeof(size_t));
 	p->as = calloc(p->asz, sizeof(struct cert_as));
 	if (p->as == NULL)
 		err(1, NULL);
-	for (i = 0; i < p->asz; i++)
-		cert_as_read(fd, &p->as[i]);
+	io_read_buf(b, p->as, p->asz * sizeof(p->as[0]));
 
-	io_str_read(fd, &p->mft);
-	assert(p->mft);
-	io_str_read(fd, &p->notify);
-	io_str_read(fd, &p->repo);
-	io_str_read(fd, &p->crl);
-	io_str_read(fd, &p->aia);
-	io_str_read(fd, &p->aki);
-	io_str_read(fd, &p->ski);
+	io_read_str(b, &p->mft);
+	io_read_str(b, &p->notify);
+	io_read_str(b, &p->repo);
+	io_read_str(b, &p->crl);
+	io_read_str(b, &p->aia);
+	io_read_str(b, &p->aki);
+	io_read_str(b, &p->ski);
+	io_read_str(b, &p->pubkey);
+
+	assert(p->mft != NULL || p->purpose == CERT_PURPOSE_BGPSEC_ROUTER);
 	assert(p->ski);
-
 	return p;
 }
 
@@ -1334,6 +1307,24 @@ auth_find(struct auth_tree *auths, const char *aki)
 	return RB_FIND(auth_tree, auths, &a);
 }
 
+int
+auth_insert(struct auth_tree *auths, struct cert *cert, struct auth *parent)
+{
+	struct auth *na;
+
+	na = malloc(sizeof(*na));
+	if (na == NULL)
+		err(1, NULL);
+
+	na->parent = parent;
+	na->cert = cert;
+
+	if (RB_INSERT(auth_tree, auths, na) != NULL)
+		err(1, "auth tree corrupted");
+
+	return 1;
+}
+
 static inline int
 authcmp(struct auth *a, struct auth *b)
 {
@@ -1341,3 +1332,80 @@ authcmp(struct auth *a, struct auth *b)
 }
 
 RB_GENERATE(auth_tree, auth, entry, authcmp);
+
+static void
+insert_brk(struct brk_tree *tree, struct cert *cert, int asid)
+{
+	struct brk	*b, *found;
+
+	if ((b = calloc(1, sizeof(*b))) == NULL)
+		err(1, NULL);
+
+	b->asid = asid;
+	b->expires = cert->expires;
+	b->talid = cert->talid;
+	if ((b->ski = strdup(cert->ski)) == NULL)
+		err(1, NULL);
+	if ((b->pubkey = strdup(cert->pubkey)) == NULL)
+		err(1, NULL);
+
+	/*
+	 * Check if a similar BRK already exists in the tree. If the found BRK
+	 * expires sooner, update it to this BRK's later expiry moment.
+	 */
+	if ((found = RB_INSERT(brk_tree, tree, b)) != NULL) {
+		if (found->expires < b->expires) {
+			found->expires = b->expires;
+			found->talid = b->talid;
+		}
+		free(b->ski);
+		free(b->pubkey);
+		free(b);
+	}
+}
+
+/*
+ * Add each BGPsec Router Key into the BRK tree.
+ */
+void
+cert_insert_brks(struct brk_tree *tree, struct cert *cert)
+{
+	size_t		 i, asid;
+
+	for (i = 0; i < cert->asz; i++) {
+		switch (cert->as[i].type) {
+		case CERT_AS_ID:
+			insert_brk(tree, cert, cert->as[i].id);
+			break;
+		case CERT_AS_RANGE:
+			for (asid = cert->as[i].range.min;
+			    asid <= cert->as[i].range.max; asid++)
+				insert_brk(tree, cert, asid);
+			break;
+		default:
+			warnx("invalid AS identifier type");
+			continue;
+		}
+	}
+}
+
+static inline int
+brkcmp(struct brk *a, struct brk *b)
+{
+	int rv;
+
+	if (a->asid > b->asid)
+		return 1;
+	if (a->asid < b->asid)
+		return -1;
+
+	rv = strcmp(a->ski, b->ski);
+	if (rv > 0)
+		return 1;
+	if (rv < 0)
+		return -1;
+
+	return strcmp(a->pubkey, b->pubkey);
+}
+
+RB_GENERATE(brk_tree, brk, entry, brkcmp);

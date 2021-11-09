@@ -1,4 +1,4 @@
-/*	$OpenBSD: http.c,v 1.40 2021/09/23 13:26:51 tb Exp $  */
+/*	$OpenBSD: http.c,v 1.40.2.1 2021/11/09 13:40:32 benno Exp $  */
 /*
  * Copyright (c) 2020 Nils Fisher <nils_fisher@hotmail.com>
  * Copyright (c) 2020 Claudio Jeker <claudio@openbsd.org>
@@ -72,6 +72,7 @@
 #define HTTP_IDLE_TIMEOUT	10
 #define HTTP_IO_TIMEOUT		(3 * 60)
 #define MAX_CONNECTIONS		64
+#define MAX_CONTENTLEN		(2 * 1024 * 1024 * 1024LL)
 #define NPFDS			(MAX_CONNECTIONS + 1)
 
 enum res {
@@ -119,6 +120,7 @@ struct http_connection {
 	size_t			bufsz;
 	size_t			bufpos;
 	off_t			iosz;
+	off_t			totalsz;
 	time_t			idle_time;
 	time_t			io_time;
 	int			status;
@@ -157,7 +159,7 @@ static uint8_t *tls_ca_mem;
 static size_t tls_ca_size;
 
 /* HTTP request API */
-static void	http_req_new(size_t, char *, char *, int);
+static void	http_req_new(size_t, char *, char *, int, int);
 static void	http_req_free(struct http_request *);
 static void	http_req_done(size_t, enum http_result, const char *);
 static void	http_req_fail(size_t);
@@ -190,16 +192,6 @@ static enum res	http_write(struct http_connection *);
 static enum res	proxy_read(struct http_connection *);
 static enum res	proxy_write(struct http_connection *);
 static enum res	data_write(struct http_connection *);
-
-static time_t
-getmonotime(void)
-{
-	struct timespec ts;
-
-	if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
-		err(1, "clock_gettime");
-	return (ts.tv_sec);
-}
 
 /*
  * Return a string that can be used in error message to identify the
@@ -515,7 +507,7 @@ http_resolv(struct addrinfo **res, const char *host, const char *port)
  * Create and queue a new request.
  */
 static void
-http_req_new(size_t id, char *uri, char *modified_since, int outfd)
+http_req_new(size_t id, char *uri, char *modified_since, int count, int outfd)
 {
 	struct http_request *req;
 	char *host, *port, *path;
@@ -538,6 +530,7 @@ http_req_new(size_t id, char *uri, char *modified_since, int outfd)
 	req->path = path;
 	req->uri = uri;
 	req->modified_since = modified_since;
+	req->redirect_loop = count;
 
 	TAILQ_INSERT_TAIL(&queue, req, entry);
 }
@@ -569,12 +562,11 @@ http_req_done(size_t id, enum http_result res, const char *last_modified)
 {
 	struct ibuf *b;
 
-	if ((b = ibuf_dynamic(64, UINT_MAX)) == NULL)
-		err(1, NULL);
+	b = io_new_buffer();
 	io_simple_buffer(b, &id, sizeof(id));
 	io_simple_buffer(b, &res, sizeof(res));
 	io_str_buffer(b, last_modified);
-	ibuf_close(&msgq, b);
+	io_close_buffer(&msgq, b);
 }
 
 /*
@@ -586,12 +578,11 @@ http_req_fail(size_t id)
 	struct ibuf *b;
 	enum http_result res = HTTP_FAILED;
 
-	if ((b = ibuf_dynamic(8, UINT_MAX)) == NULL)
-		err(1, NULL);
+	b = io_new_buffer();
 	io_simple_buffer(b, &id, sizeof(id));
 	io_simple_buffer(b, &res, sizeof(res));
 	io_str_buffer(b, NULL);
-	ibuf_close(&msgq, b);
+	io_close_buffer(&msgq, b);
 }
 
 /*
@@ -988,8 +979,6 @@ http_request(struct http_connection *conn)
 	assert(conn->state == STATE_IDLE || conn->state == STATE_TLSCONNECT);
 	conn->state = STATE_REQUEST;
 
-	/* TODO adjust request for HTTP proxy setups */
-
 	/*
 	 * Send port number only if it's specified and does not equal
 	 * the default. Some broken HTTP servers get confused if you explicitly
@@ -1147,7 +1136,8 @@ http_redirect(struct http_connection *conn)
 			err(1, NULL);
 
 	logx("redirect to %s", http_info(uri));
-	http_req_new(conn->req->id, uri, mod_since, outfd);	
+	http_req_new(conn->req->id, uri, mod_since, conn->req->redirect_loop,
+	    outfd);	
 
 	/* clear request before moving connection to idle */
 	http_req_free(conn->req);
@@ -1175,7 +1165,7 @@ http_parse_header(struct http_connection *conn, char *buf)
 		cp += sizeof(CONTENTLEN) - 1;
 		if ((s = strcspn(cp, " \t")) != 0)
 			*(cp+s) = 0;
-		conn->iosz = strtonum(cp, 0, LLONG_MAX, &errstr);
+		conn->iosz = strtonum(cp, 0, MAX_CONTENTLEN, &errstr);
 		if (errstr != NULL) {
 			warnx("Content-Length of %s is %s",
 			    http_info(conn->req->uri), errstr);
@@ -1311,6 +1301,9 @@ http_read(struct http_connection *conn)
 	char *buf;
 	int done;
 
+	if (conn->bufpos > 0)
+		goto again;
+
 read_more:
 	s = tls_read(conn->tls, conn->buf + conn->bufpos,
 	    conn->bufsz - conn->bufpos);
@@ -1390,7 +1383,7 @@ again:
 
 			if (rv == -1)
 				return http_failed(conn);
-			if (rv ==  0)
+			if (rv == 0)
 				done = 1;
 		}
 
@@ -1399,6 +1392,7 @@ again:
 			if (http_isredirect(conn))
 				http_redirect(conn);
 
+			conn->totalsz = 0;
 			if (conn->chunked)
 				conn->state = STATE_RESPONSE_CHUNKED_HEADER;
 			else
@@ -1422,10 +1416,10 @@ again:
 			 * After redirects all data needs to be discarded.
 			 */
 			if (conn->iosz < (off_t)conn->bufpos) {
-				conn->bufpos  -= conn->iosz;
+				conn->bufpos -= conn->iosz;
 				conn->iosz = 0;
 			} else {
-				conn->iosz  -= conn->bufpos;
+				conn->iosz -= conn->bufpos;
 				conn->bufpos = 0;
 			}
 			if (conn->chunked)
@@ -1656,9 +1650,14 @@ data_write(struct http_connection *conn)
 		bsz = conn->iosz;
 
 	s = write(conn->req->outfd, conn->buf, bsz);
-
 	if (s == -1) {
 		warn("%s: data write", http_info(conn->req->uri));
+		return http_failed(conn);
+	}
+
+	conn->totalsz += s;
+	if (conn->totalsz > MAX_CONTENTLEN) {
+		warn("%s: too much data offered", http_info(conn->req->uri));
 		return http_failed(conn);
 	}
 
@@ -1672,7 +1671,7 @@ data_write(struct http_connection *conn)
 
 	/* all data written, switch back to read */
 	if (conn->bufpos == 0 || conn->iosz == 0) {
-		if (conn->chunked)
+		if (conn->chunked && conn->iosz == 0)
 			conn->state = STATE_RESPONSE_CHUNKED_TRAILER;
 		else
 			conn->state = STATE_RESPONSE_DATA;
@@ -1768,6 +1767,7 @@ proc_http(char *bind_addr, int fd)
 	struct pollfd pfds[NPFDS];
 	struct http_connection *conn, *nc;
 	struct http_request *req, *nr;
+	struct ibuf *b, *inbuf = NULL;
 
 	if (bind_addr != NULL) {
 		struct addrinfo hints, *res;
@@ -1858,17 +1858,20 @@ proc_http(char *bind_addr, int fd)
 			}
 		}
 		if (pfds[0].revents & POLLIN) {
-			size_t id;
-			int outfd;
-			char *uri;
-			char *mod;
+			b = io_buf_recvfd(fd, &inbuf);
+			if (b != NULL) {
+				size_t id;
+				char *uri;
+				char *mod;
 
-			outfd = io_recvfd(fd, &id, sizeof(id));
-			io_str_read(fd, &uri);
-			io_str_read(fd, &mod);
+				io_read_buf(b, &id, sizeof(id));
+				io_read_str(b, &uri);
+				io_read_str(b, &mod);
 
-			/* queue up new requests */
-			http_req_new(id, uri, mod, outfd);
+				/* queue up new requests */
+				http_req_new(id, uri, mod, 0, b->fd);
+				ibuf_free(b);
+			}
 		}
 
 		now = getmonotime();

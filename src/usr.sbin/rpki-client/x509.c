@@ -1,5 +1,6 @@
-/*	$OpenBSD: x509.c,v 1.21 2021/04/01 06:43:23 claudio Exp $ */
+/*	$OpenBSD: x509.c,v 1.21.6.1 2021/11/09 13:40:32 benno Exp $ */
 /*
+ * Copyright (c) 2021 Claudio Jeker <claudio@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
  * Permission to use, copy, modify, and distribute this software for any
@@ -24,9 +25,19 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <openssl/evp.h>
 #include <openssl/x509v3.h>
 
 #include "extern.h"
+
+static ASN1_OBJECT	*bgpsec_oid;	/* id-kp-bgpsec-router */
+
+static void
+init_oid(void)
+{
+	if ((bgpsec_oid = OBJ_txt2obj("1.3.6.1.5.5.7.3.30", 1)) == NULL)
+		errx(1, "OBJ_txt2obj for %s failed", "1.3.6.1.5.5.7.3.30");
+}
 
 /*
  * Parse X509v3 authority key identifier (AKI), RFC 6487 sec. 4.8.3.
@@ -79,6 +90,7 @@ x509_get_aki(X509 *x, int ta, const char *fn)
 	}
 
 	res = hex_encode(d, dsz);
+
 out:
 	AUTHORITY_KEYID_free(akid);
 	return res;
@@ -125,6 +137,109 @@ out:
 }
 
 /*
+ * Check the certificate's purpose: CA or BGPsec Router.
+ * Return a member of enum cert_purpose.
+ */
+enum cert_purpose
+x509_get_purpose(X509 *x, const char *fn)
+{
+	EXTENDED_KEY_USAGE		*eku = NULL;
+	int				 crit;
+	enum cert_purpose		 purpose = 0;
+
+	if (X509_check_ca(x) == 1) {
+		purpose = CERT_PURPOSE_CA;
+		goto out;
+	}
+
+	eku = X509_get_ext_d2i(x, NID_ext_key_usage, &crit, NULL);
+	if (eku == NULL) {
+		warnx("%s: EKU: extension missing", fn);
+		goto out;
+	}
+	if (crit != 0) {
+		warnx("%s: EKU: extension must not be marked critical", fn);
+		goto out;
+	}
+	if (sk_ASN1_OBJECT_num(eku) != 1) {
+		warnx("%s: EKU: expected 1 purpose, have %d", fn,
+		    sk_ASN1_OBJECT_num(eku));
+		goto out;
+	}
+
+	if (bgpsec_oid == NULL)
+		init_oid();
+
+	if (OBJ_cmp(bgpsec_oid, sk_ASN1_OBJECT_value(eku, 0)) == 0) {
+		purpose = CERT_PURPOSE_BGPSEC_ROUTER;
+		goto out;
+	}
+
+ out:
+	EXTENDED_KEY_USAGE_free(eku);
+	return purpose;
+}
+
+/*
+ * Extract Subject Public Key Info (SPKI) from BGPsec X.509 Certificate.
+ * Returns NULL on failure, on success return the SPKI as base64 encoded pubkey
+ */
+char *
+x509_get_pubkey(X509 *x, const char *fn)
+{
+	EVP_PKEY	*pkey;
+	EC_KEY		*eckey;
+	int		 nid;
+	const char	*cname;
+	uint8_t		*pubkey = NULL;
+	char		*res = NULL;
+	int		 len;
+
+	pkey = X509_get0_pubkey(x);
+	if (pkey == NULL) {
+		warnx("%s: X509_get_pubkey failed in %s", fn, __func__);
+		goto out;
+	}
+	if (EVP_PKEY_base_id(pkey) != EVP_PKEY_EC) {
+		warnx("%s: Expected EVP_PKEY_EC, got %d", fn,
+		    EVP_PKEY_base_id(pkey));
+		goto out;
+	}
+
+	eckey = EVP_PKEY_get0_EC_KEY(pkey);
+	if (eckey == NULL) {
+		warnx("%s: Incorrect key type", fn);
+		goto out;
+	}
+
+	nid = EC_GROUP_get_curve_name(EC_KEY_get0_group(eckey));
+	if (nid != NID_X9_62_prime256v1) {
+		if ((cname = EC_curve_nid2nist(nid)) == NULL)
+			cname = OBJ_nid2sn(nid);
+		warnx("%s: Expected P-256, got %s", fn, cname);
+		goto out;
+	}
+
+	if (!EC_KEY_check_key(eckey)) {
+		warnx("%s: EC_KEY_check_key failed in %s", fn, __func__);
+		goto out;
+	}
+
+	len = i2d_PUBKEY(pkey, &pubkey);
+	if (len <= 0) {
+		warnx("%s: i2d_PUBKEY failed in %s", fn, __func__);
+		goto out;
+	}
+
+	if (base64_encode(pubkey, len, &res) == -1)
+		errx(1, "base64_encode failed in %s", __func__);
+
+ out:
+	free(pubkey);
+	return res;
+}
+
+/*
  * Parse the Authority Information Access (AIA) extension
  * See RFC 6487, section 4.8.7 for details.
  * Returns NULL on failure, on success returns the AIA URI
@@ -167,6 +282,13 @@ x509_get_aia(X509 *x, const char *fn)
 		goto out;
 	}
 
+	if (ASN1_STRING_length(ad->location->d.uniformResourceIdentifier)
+	    > MAX_URI_LENGTH) {
+		warnx("%s: RFC 6487 section 4.8.7: AIA: "
+		    "URI exceeds max length of %d", fn, MAX_URI_LENGTH);
+		goto out;
+	}
+
 	aia = strndup(
 	    ASN1_STRING_get0_data(ad->location->d.uniformResourceIdentifier),
 	    ASN1_STRING_length(ad->location->d.uniformResourceIdentifier));
@@ -176,6 +298,34 @@ x509_get_aia(X509 *x, const char *fn)
 out:
 	AUTHORITY_INFO_ACCESS_free(info);
 	return aia;
+}
+
+/*
+ * Extract the expire time (not-after) of a certificate.
+ */
+int
+x509_get_expire(X509 *x, const char *fn, time_t *tt)
+{
+	const ASN1_TIME	*at;
+	struct tm	 expires_tm;
+	time_t		 expires;
+
+	at = X509_get0_notAfter(x);
+	if (at == NULL) {
+		warnx("%s: X509_get0_notafter failed", fn);
+		return 0;
+	}
+	memset(&expires_tm, 0, sizeof(expires_tm));
+	if (ASN1_time_parse(at->data, at->length, &expires_tm, 0) == -1) {
+		warnx("%s: ASN1_time_parse failed", fn);
+		return 0;
+	}
+	if ((expires = mktime(&expires_tm)) == -1)
+		errx(1, "%s: mktime failed", fn);
+
+	*tt = expires;
+	return 1;
+
 }
 
 /*
@@ -236,6 +386,13 @@ x509_get_crl(X509 *x, const char *fn)
 	if (name->type != GEN_URI) {
 		warnx("%s: RFC 6487 section 4.8.6: CRL: "
 		    "want URI type, have %d", fn, name->type);
+		goto out;
+	}
+
+	if (ASN1_STRING_length(name->d.uniformResourceIdentifier)
+	    > MAX_URI_LENGTH) {
+		warnx("%s: RFC 6487 section 4.8.6: CRL: "
+		    "URI exceeds max length of %d", fn, MAX_URI_LENGTH);
 		goto out;
 	}
 
