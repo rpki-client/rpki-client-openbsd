@@ -1,4 +1,4 @@
-/*	$OpenBSD: output-bgpd.c,v 1.20 2021/03/29 03:39:14 deraadt Exp $ */
+/*	$OpenBSD: output-bgpd.c,v 1.20.2.1 2021/11/09 13:41:19 benno Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -20,9 +20,9 @@
 #include "extern.h"
 
 int
-output_bgpd(FILE *out, struct vrp_tree *vrps, struct stats *st)
+output_bgpd(FILE *out, struct vrp_tree *vrps, struct brk_tree *brks,
+    struct stats *st)
 {
-	char		 ipbuf[64], maxlenbuf[100];
 	struct vrp	*v;
 
 	if (outputheader(out, st) < 0)
@@ -32,6 +32,8 @@ output_bgpd(FILE *out, struct vrp_tree *vrps, struct stats *st)
 		return -1;
 
 	RB_FOREACH(v, vrp_tree, vrps) {
+		char ipbuf[64], maxlenbuf[100];
+
 		ip_addr_print(&v->addr, v->afi, ipbuf, sizeof(ipbuf));
 		if (v->maxlength > v->addr.prefixlen) {
 			int ret = snprintf(maxlenbuf, sizeof(maxlenbuf),
@@ -40,8 +42,8 @@ output_bgpd(FILE *out, struct vrp_tree *vrps, struct stats *st)
 				return -1;
 		} else
 			maxlenbuf[0] = '\0';
-		if (fprintf(out, "\t%s %ssource-as %u\n",
-		    ipbuf, maxlenbuf, v->asid) < 0)
+		if (fprintf(out, "\t%s %ssource-as %u expires %lld\n",
+		    ipbuf, maxlenbuf, v->asid, (long long)v->expires) < 0)
 			return -1;
 	}
 

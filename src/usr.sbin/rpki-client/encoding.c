@@ -1,4 +1,4 @@
-/*      $OpenBSD: encoding.c,v 1.1 2021/04/01 06:43:23 claudio Exp $  */
+/*      $OpenBSD: encoding.c,v 1.1.2.1 2021/11/09 13:41:19 benno Exp $  */
 /*
  * Copyright (c) 2020 Claudio Jeker <claudio@openbsd.org>
  *
@@ -14,14 +14,77 @@
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
+#include <sys/stat.h>
+
 #include <err.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <openssl/evp.h>
 
 #include "extern.h"
+
+/*
+ * Load file from disk and return the buffer and size.
+ */
+unsigned char *
+load_file(const char *name, size_t *len)
+{
+	unsigned char *buf = NULL;
+	struct stat st;
+	ssize_t n;
+	size_t size;
+	int fd, saved_errno;
+
+	*len = 0;
+
+	if ((fd = open(name, O_RDONLY)) == -1)
+		return NULL;
+	if (fstat(fd, &st) != 0)
+		goto err;
+	if (st.st_size <= 0 || st.st_size > MAX_FILE_SIZE) {
+		errno = EFBIG;
+		goto err;
+	}
+	size = (size_t)st.st_size;
+	if ((buf = malloc(size)) == NULL)
+		goto err;
+	n = read(fd, buf, size);
+	if (n == -1)
+		goto err;
+	if ((size_t)n != size) {
+		errno = EIO;
+		goto err;
+	}
+	close(fd);
+	*len = size;
+	return buf;
+
+err:
+	saved_errno = errno;
+	close(fd);
+	free(buf);
+	errno = saved_errno;
+	return NULL;
+}
+
+/*
+ * Return the size of the data blob in outlen for an inlen sized base64 buffer.
+ * Returns 0 on success and -1 if inlen would overflow an int.
+ */
+int
+base64_decode_len(size_t inlen, size_t *outlen)
+{
+	*outlen = 0;
+	if (inlen >= INT_MAX - 3)
+		return -1;
+	*outlen = ((inlen + 3) / 4) * 3 + 1;
+	return 0;
+}
 
 /*
  * Decode base64 encoded string into binary buffer returned in out.
@@ -29,12 +92,13 @@
  * Returns 0 on success or -1 for any errors.
  */
 int
-base64_decode(const unsigned char *in, unsigned char **out, size_t *outlen)
+base64_decode(const unsigned char *in, size_t inlen,
+    unsigned char **out, size_t *outlen)
 {
 	static EVP_ENCODE_CTX *ctx;
 	unsigned char *to;
-	size_t inlen;
-	int tolen;
+	size_t tolen;
+	int evplen;
 
 	if (ctx == NULL && (ctx = EVP_ENCODE_CTX_new()) == NULL)
 		err(1, "EVP_ENCODE_CTX_new");
@@ -42,26 +106,61 @@ base64_decode(const unsigned char *in, unsigned char **out, size_t *outlen)
 	*out = NULL;
 	*outlen = 0;
 
-	inlen = strlen(in);
-	if (inlen >= INT_MAX - 3)
+	if (base64_decode_len(inlen, &tolen) == -1)
 		return -1;
-	tolen = ((inlen + 3) / 4) * 3 + 1;
 	if ((to = malloc(tolen)) == NULL)
 		return -1;
 
+	evplen = tolen;
 	EVP_DecodeInit(ctx);
-	if (EVP_DecodeUpdate(ctx, to, &tolen, in, inlen) == -1)
+	if (EVP_DecodeUpdate(ctx, to, &evplen, in, inlen) == -1)
 		goto fail;
-	*outlen = tolen;
-	if (EVP_DecodeFinal(ctx, to + tolen, &tolen) == -1)
+	*outlen = evplen;
+	if (EVP_DecodeFinal(ctx, to + evplen, &evplen) == -1)
 		goto fail;
-	*outlen += tolen;
+	*outlen += evplen;
 	*out = to;
 	return 0;
 
 fail:
 	free(to);
 	return -1;
+}
+
+/*
+ * Return the size of the base64 blob in outlen for a inlen sized binary buffer.
+ * Returns 0 on success and -1 if inlen would overflow the calculation.
+ */
+int
+base64_encode_len(size_t inlen, size_t *outlen)
+{
+	*outlen = 0;
+	if (inlen >= INT_MAX / 2)
+		return -1;
+	*outlen = ((inlen + 2) / 3) * 4 + 1;
+	return 0;
+}
+
+/*
+ * Encode a binary buffer into a base64 encoded string returned in out.
+ * Returns 0 on success or -1 for any errors.
+ */
+int
+base64_encode(const unsigned char *in, size_t inlen, char **out)
+{
+	unsigned char *to;
+	size_t tolen;
+
+	*out = NULL;
+
+	if (base64_encode_len(inlen, &tolen) == -1)
+		return -1;
+	if ((to = malloc(tolen)) == NULL)
+		return -1;
+
+	EVP_EncodeBlock(to, in, inlen);
+	*out = to;
+	return 0;
 }
 
 /*

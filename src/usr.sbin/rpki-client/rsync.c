@@ -1,4 +1,4 @@
-/*	$OpenBSD: rsync.c,v 1.23 2021/04/01 11:04:30 job Exp $ */
+/*	$OpenBSD: rsync.c,v 1.23.2.1 2021/11/09 13:41:19 benno Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -32,6 +32,9 @@
 #include <imsg.h>
 
 #include "extern.h"
+
+#define	__STRINGIFY(x)	#x
+#define	STRINGIFY(x)	__STRINGIFY(x)
 
 /*
  * A running rsync process.
@@ -116,17 +119,11 @@ proc_child(int signal)
 void
 proc_rsync(char *prog, char *bind_addr, int fd)
 {
-	size_t			 id, i, idsz = 0;
-	ssize_t			 ssz;
-	char			*uri = NULL, *dst = NULL, *path, *save, *cmd;
-	const char		*pp;
-	pid_t			 pid;
-	char			*args[32];
-	int			 st, rc = 0;
-	struct stat		 stt;
+	size_t			 i, idsz = 0, nprocs = 0;
+	int			 rc = 0;
 	struct pollfd		 pfd;
 	struct msgbuf		 msgq;
-	struct ibuf		*b;
+	struct ibuf		*b, *inbuf = NULL;
 	sigset_t		 mask, oldmask;
 	struct rsyncproc	*ids = NULL;
 
@@ -143,6 +140,10 @@ proc_rsync(char *prog, char *bind_addr, int fd)
 	 */
 
 	if (strchr(prog, '/') == NULL) {
+		const char *pp;
+		char *save, *cmd, *path;
+		struct stat stt;
+
 		if (getenv("PATH") == NULL)
 			errx(1, "PATH is unset");
 		if ((path = strdup(getenv("PATH"))) == NULL)
@@ -180,7 +181,14 @@ proc_rsync(char *prog, char *bind_addr, int fd)
 		err(1, NULL);
 
 	for (;;) {
-		pfd.events = POLLIN;
+		char *uri = NULL, *dst = NULL;
+		size_t id;
+		pid_t pid;
+		int st;
+
+		pfd.events = 0;
+		if (nprocs < MAX_RSYNC_PROCESSES)
+			pfd.events |= POLLIN;
 		if (msgq.queued)
 			pfd.events |= POLLOUT;
 
@@ -213,17 +221,16 @@ proc_rsync(char *prog, char *bind_addr, int fd)
 					ok = 0;
 				}
 
-				b = ibuf_open(sizeof(size_t) + sizeof(ok));
-				if (b == NULL)
-					err(1, NULL);
+				b = io_new_buffer();
 				io_simple_buffer(b, &ids[i].id, sizeof(size_t));
 				io_simple_buffer(b, &ok, sizeof(ok));
-				ibuf_close(&msgq, b);
+				io_close_buffer(&msgq, b);
 
 				free(ids[i].uri);
 				ids[i].uri = NULL;
 				ids[i].pid = 0;
 				ids[i].id = 0;
+				nprocs--;
 			}
 			if (pid == -1 && errno != ECHILD)
 				err(1, "waitpid");
@@ -239,23 +246,24 @@ proc_rsync(char *prog, char *bind_addr, int fd)
 			}
 		}
 
+		/* connection closed */
+		if (pfd.revents & POLLHUP)
+			break;
+
 		if (!(pfd.revents & POLLIN))
 			continue;
 
-		/*
-		 * Read til the parent exits.
-		 * That will mean that we can safely exit.
-		 */
-
-		if ((ssz = read(fd, &id, sizeof(size_t))) == -1)
-			err(1, "read");
-		if (ssz == 0)
-			break;
+		b = io_buf_read(fd, &inbuf);
+		if (b == NULL)
+			continue;
 
 		/* Read host and module. */
+		io_read_buf(b, &id, sizeof(id));
+		io_read_str(b, &dst);
+		io_read_str(b, &uri);
 
-		io_str_read(fd, &dst);
-		io_str_read(fd, &uri);
+		ibuf_free(b);
+
 		assert(dst);
 		assert(uri);
 
@@ -265,14 +273,23 @@ proc_rsync(char *prog, char *bind_addr, int fd)
 			err(1, "fork");
 
 		if (pid == 0) {
+			char *args[32];
+
 			if (pledge("stdio exec", NULL) == -1)
 				err(1, "pledge");
 			i = 0;
 			args[i++] = (char *)prog;
 			args[i++] = "-rt";
 			args[i++] = "--no-motd";
-			args[i++] = "--timeout";
-			args[i++] = "180";
+			args[i++] = "--max-size=" STRINGIFY(MAX_FILE_SIZE);
+			args[i++] = "--timeout=180";
+			args[i++] = "--include=*/";
+			args[i++] = "--include=*.cer";
+			args[i++] = "--include=*.crl";
+			args[i++] = "--include=*.gbr";
+			args[i++] = "--include=*.mft";
+			args[i++] = "--include=*.roa";
+			args[i++] = "--exclude=*";
 			if (bind_addr != NULL) {
 				args[i++] = "--address";
 				args[i++] = (char *)bind_addr;
@@ -280,6 +297,7 @@ proc_rsync(char *prog, char *bind_addr, int fd)
 			args[i++] = uri;
 			args[i++] = dst;
 			args[i] = NULL;
+			/* XXX args overflow not prevented */
 			execvp(args[0], args);
 			err(1, "%s: execvp", prog);
 		}
@@ -299,6 +317,7 @@ proc_rsync(char *prog, char *bind_addr, int fd)
 		ids[i].id = id;
 		ids[i].pid = pid;
 		ids[i].uri = uri;
+		nprocs++;
 
 		/* Clean up temporary values. */
 

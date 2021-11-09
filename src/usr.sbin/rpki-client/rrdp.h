@@ -1,3 +1,20 @@
+/*	$OpenBSD: rrdp.h,v 1.1.2.1 2021/11/09 13:41:19 benno Exp $ */
+/*
+ * Copyright (c) 2020 Nils Fisher <nils_fisher@hotmail.com>
+ * Copyright (c) 2021 Claudio Jeker <claudio@openbsd.org>
+ *
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose with or without fee is hereby granted, provided that the above
+ * copyright notice and this permission notice appear in all copies.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+ * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+ */
 #ifndef _RRDPH_
 #define _RRDPH_
 
@@ -10,7 +27,7 @@
 	XML_StopParser(p, XML_FALSE);	\
 	warnx(__VA_ARGS__);		\
 	return;				\
-} while(0)
+} while (0)
 
 enum rrdp_task {
 	NOTIFICATION,
@@ -19,7 +36,7 @@ enum rrdp_task {
 };
 
 /* rrdp generic */
-char 	*xstrdup(const char *);
+char	*xstrdup(const char *);
 int	 hex_decode(const char *, char *, size_t);
 
 /* publish or withdraw element */
@@ -29,7 +46,7 @@ struct publish_xml;
 struct publish_xml	*new_publish_xml(enum publish_type, char *,
 			    char *, size_t);
 void			 free_publish_xml(struct publish_xml *);
-void			 publish_add_content(struct publish_xml *,
+int			 publish_add_content(struct publish_xml *,
 			    const char *, int);
 int			 publish_done(struct rrdp *, struct publish_xml *);
 
@@ -37,8 +54,9 @@ int			 publish_done(struct rrdp *, struct publish_xml *);
 struct notification_xml;
 
 struct notification_xml	*new_notification_xml(XML_Parser,
-			    struct rrdp_session *, struct rrdp_session *);
-void		 	 free_notification_xml(struct notification_xml *);
+			    struct rrdp_session *, struct rrdp_session *,
+			    const char *);
+void			 free_notification_xml(struct notification_xml *);
 enum rrdp_task		 notification_done(struct notification_xml *,
 			    char *);
 const char		*notification_get_next(struct notification_xml *,

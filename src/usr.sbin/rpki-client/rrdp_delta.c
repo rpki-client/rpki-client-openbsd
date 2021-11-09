@@ -86,7 +86,7 @@ start_delta_elem(struct delta_xml *dxml, const char **attr)
 				continue;
 		}
 		PARSE_FAIL(p, "parse failed - non conforming "
-		    "attribute found in delta elem");
+		    "attribute '%s' found in delta elem", attr[i]);
 	}
 	if (!(has_xmlns && dxml->version && dxml->session_id && dxml->serial))
 		PARSE_FAIL(p, "parse failed - incomplete delta attributes");
@@ -115,7 +115,7 @@ start_publish_withdraw_elem(struct delta_xml *dxml, const char **attr,
     int withdraw)
 {
 	XML_Parser p = dxml->parser;
-	char *uri, hash[SHA256_DIGEST_LENGTH];
+	char *uri = NULL, hash[SHA256_DIGEST_LENGTH];
 	int i, hasUri = 0, hasHash = 0;
 	enum publish_type pub = PUB_UPD;
 
@@ -135,7 +135,7 @@ start_publish_withdraw_elem(struct delta_xml *dxml, const char **attr,
 				continue;
 		}
 		PARSE_FAIL(p, "parse failed - non conforming "
-		    "attribute found in publish/withdraw elem");
+		    "attribute '%s' found in publish/withdraw elem", attr[i]);
 	}
 	if (hasUri != 1)
 		PARSE_FAIL(p,
@@ -217,9 +217,21 @@ static void
 delta_content_handler(void *data, const char *content, int length)
 {
 	struct delta_xml *dxml = data;
+	XML_Parser p = dxml->parser;
 
 	if (dxml->scope == DELTA_SCOPE_PUBLISH)
-		publish_add_content(dxml->pxml, content, length);
+		if (publish_add_content(dxml->pxml, content, length) == -1)
+			PARSE_FAIL(p, "parse failed - content too big");
+}
+
+static void
+delta_doctype_handler(void *data, const char *doctypeName,
+    const char *sysid, const char *pubid, int subset)
+{
+	struct delta_xml *dxml = data;
+	XML_Parser p = dxml->parser;
+
+	PARSE_FAIL(p, "parse failed - DOCTYPE not allowed");
 }
 
 struct delta_xml *
@@ -240,6 +252,7 @@ new_delta_xml(XML_Parser p, struct rrdp_session *rs, struct rrdp *r)
 	    delta_xml_elem_end);
 	XML_SetCharacterDataHandler(dxml->parser, delta_content_handler);
 	XML_SetUserData(dxml->parser, dxml);
+	XML_SetDoctypeDeclHandler(dxml->parser, delta_doctype_handler, NULL);
 
 	return dxml;
 }

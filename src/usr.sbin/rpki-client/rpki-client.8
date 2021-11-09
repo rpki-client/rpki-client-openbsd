@@ -1,4 +1,4 @@
-.\"	$OpenBSD: rpki-client.8,v 1.43 2021/04/08 14:03:32 job Exp $
+.\"	$OpenBSD: rpki-client.8,v 1.43.2.1 2021/11/09 13:41:19 benno Exp $
 .\"
 .\" Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
 .\"
@@ -14,7 +14,7 @@
 .\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 .\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 .\"
-.Dd $Mdocdate: April 8 2021 $
+.Dd $Mdocdate: November 9 2021 $
 .Dt RPKI-CLIENT 8
 .Os
 .Sh NAME
@@ -66,9 +66,13 @@ with multiple interfaces.
 .It Fl c
 Create output in the file
 .Pa csv
-in the output directory as comma-separated values of the prefix in slash notation,
-the maximum prefix length, the autonomous system number, and an abbreviation
-for the trust anchor the entry is derived from.
+in the output directory as comma-separated values of the
+.Em Autonomous System ,
+the prefix in slash notation, the maximum prefix length, an abbreviation for
+the
+.Em Trust Anchor
+the entry is derived from, and the moment the VRP will expire derived from
+the chain of X.509 certificates and CRLs in seconds since the Epoch, UTC.
 .It Fl d Ar cachedir
 The directory where
 .Nm
@@ -90,11 +94,15 @@ flags and connect with rsync-protocol locations.
 Create output in the file
 .Pa json
 in the output directory as JSON object.
-This format is similar to that produced by other RPKI validators.
+See
+.Fl c
+for a description of the fields.
 .It Fl n
 Offline mode.
 Validate the contents of
 .Ar cachedir
+and write to
+.Ar outputdir
 without synchronizing via RRDP or RSYNC.
 .It Fl o
 Create output in the file
@@ -109,12 +117,11 @@ and
 .Fl j
 options are not specified this is the default.
 .It Fl R
-Do not synchronize via RRDP.
-This is the default.
+Synchronize via RSYNC only.
 .It Fl r
-Attempt to synchronize via RRDP.
+Synchronize via RRDP.
 If RRDP fails, RSYNC will be used.
-This flag is for testing purposes and will be removed in a future release.
+This is the default.
 Mutually exclusive with
 .Fl n .
 .It Fl s Ar timeout
@@ -166,8 +173,13 @@ should be run hourly by
 use
 .Xr crontab 1
 to uncomment the entry in root's crontab.
-.\" .Sh ENVIRONMENT
-.\" For sections 1, 6, 7, and 8 only.
+.Sh ENVIRONMENT
+.Nm
+utilizes the following environment variables:
+.Bl -tag -width "http_proxy"
+.It Ev http_proxy
+URL of HTTP proxy to use.
+.El
 .Sh FILES
 .Bl -tag -width "/var/db/rpki-client/openbgpd" -compact
 .It Pa /etc/rpki/*.tal
@@ -181,10 +193,6 @@ default roa-set output file.
 .El
 .Sh EXIT STATUS
 .Ex -std
-.\" For sections 1, 6, and 8 only.
-.\" .Sh EXAMPLES
-.\" .Sh DIAGNOSTICS
-.\" For sections 1, 4, 6, 7, 8, and 9 printf/stderr messages only.
 .Sh SEE ALSO
 .Xr openrsync 1 ,
 .Xr bgpd.conf 5
@@ -225,10 +233,13 @@ A Profile for X.509 PKIX Resource Certificates.
 Signed Object Template for the Resource Public Key Infrastructure (RPKI).
 .It RFC 6493
 The Resource Public Key Infrastructure (RPKI) Ghostbusters Record.
-.It RFC 7730
-Resource Public Key Infrastructure (RPKI) Trust Anchor Locator.
 .It RFC 8182
 The RPKI Repository Delta Protocol (RRDP).
+.It RFC 8209
+A Profile for BGPsec Router Certificates, Certificate Revocation Lists, and
+Certification Requests.
+.It RFC 8630
+Resource Public Key Infrastructure (RPKI) Trust Anchor Locator.
 .El
 .\" .Sh HISTORY
 .Sh AUTHORS

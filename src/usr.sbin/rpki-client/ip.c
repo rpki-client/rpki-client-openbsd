@@ -1,4 +1,4 @@
-/*	$OpenBSD: ip.c,v 1.16 2021/03/29 06:15:29 deraadt Exp $ */
+/*	$OpenBSD: ip.c,v 1.16.2.1 2021/11/09 13:41:19 benno Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -110,7 +110,6 @@ ip_addr_check_overlap(const struct cert_ip *ip, const char *fn,
 	size_t	 i, sz = ip->afi == AFI_IPV4 ? 4 : 16;
 	int	 inherit_v4 = 0, inherit_v6 = 0;
 	int	 has_v4 = 0, has_v6 = 0, socktype;
-	char	 buf[64];
 
 	/*
 	 * FIXME: cache this by having a flag on the cert_ip, else we're
@@ -147,6 +146,8 @@ ip_addr_check_overlap(const struct cert_ip *ip, const char *fn,
 	/* Check our ranges. */
 
 	for (i = 0; i < ipsz; i++) {
+		char	 buf[64];
+
 		if (ips[i].afi != ip->afi)
 			continue;
 		if (memcmp(ips[i].max, ip->min, sz) <= 0 ||
@@ -281,58 +282,6 @@ ip_addr_print(const struct ip_addr *addr,
 		ip4_addr2str(addr, buf, bufsz);
 	else
 		ip6_addr2str(addr, buf, bufsz);
-}
-
-/*
- * Serialise an ip_addr for sending over the wire.
- * Matched with ip_addr_read().
- */
-void
-ip_addr_buffer(struct ibuf *b, const struct ip_addr *p)
-{
-	size_t sz = PREFIX_SIZE(p->prefixlen);
-
-	assert(sz <= 16);
-	io_simple_buffer(b, &p->prefixlen, sizeof(unsigned char));
-	io_simple_buffer(b, p->addr, sz);
-}
-
-/*
- * Serialise an ip_addr_range for sending over the wire.
- * Matched with ip_addr_range_read().
- */
-void
-ip_addr_range_buffer(struct ibuf *b, const struct ip_addr_range *p)
-{
-	ip_addr_buffer(b, &p->min);
-	ip_addr_buffer(b, &p->max);
-}
-
-/*
- * Read an ip_addr from the wire.
- * Matched with ip_addr_buffer().
- */
-void
-ip_addr_read(int fd, struct ip_addr *p)
-{
-	size_t sz;
-
-	io_simple_read(fd, &p->prefixlen, sizeof(unsigned char));
-	sz = PREFIX_SIZE(p->prefixlen);
-	assert(sz <= 16);
-	io_simple_read(fd, p->addr, sz);
-}
-
-/*
- * Read an ip_addr_range from the wire.
- * Matched with ip_addr_range_buffer().
- */
-void
-ip_addr_range_read(int fd, struct ip_addr_range *p)
-{
-
-	ip_addr_read(fd, &p->min);
-	ip_addr_read(fd, &p->max);
 }
 
 /*

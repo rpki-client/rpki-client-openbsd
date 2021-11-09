@@ -1,4 +1,4 @@
-/*	$OpenBSD: output-bird.c,v 1.10 2020/09/12 15:46:48 claudio Exp $ */
+/*	$OpenBSD: output-bird.c,v 1.10.2.1 2021/11/09 13:41:19 benno Exp $ */
 /*
  * Copyright (c) 2019 Claudio Jeker <claudio@openbsd.org>
  * Copyright (c) 2020 Robert Scheck <robert@fedoraproject.org>
@@ -21,10 +21,10 @@
 #include "extern.h"
 
 int
-output_bird1v4(FILE *out, struct vrp_tree *vrps, struct stats *st)
+output_bird1v4(FILE *out, struct vrp_tree *vrps, struct brk_tree *brks,
+    struct stats *st)
 {
 	extern		const char *bird_tablename;
-	char		 buf[64];
 	struct vrp	*v;
 
 	if (outputheader(out, st) < 0)
@@ -34,6 +34,8 @@ output_bird1v4(FILE *out, struct vrp_tree *vrps, struct stats *st)
 		return -1;
 
 	RB_FOREACH(v, vrp_tree, vrps) {
+		char buf[64];
+
 		if (v->afi == AFI_IPV4) {
 			ip_addr_print(&v->addr, v->afi, buf, sizeof(buf));
 			if (fprintf(out, "\troa %s max %u as %u;\n", buf,
@@ -48,10 +50,10 @@ output_bird1v4(FILE *out, struct vrp_tree *vrps, struct stats *st)
 }
 
 int
-output_bird1v6(FILE *out, struct vrp_tree *vrps, struct stats *st)
+output_bird1v6(FILE *out, struct vrp_tree *vrps, struct brk_tree *brks,
+    struct stats *st)
 {
 	extern		const char *bird_tablename;
-	char		 buf[64];
 	struct vrp	*v;
 
 	if (outputheader(out, st) < 0)
@@ -61,6 +63,8 @@ output_bird1v6(FILE *out, struct vrp_tree *vrps, struct stats *st)
 		return -1;
 
 	RB_FOREACH(v, vrp_tree, vrps) {
+		char buf[64];
+	
 		if (v->afi == AFI_IPV6) {
 			ip_addr_print(&v->addr, v->afi, buf, sizeof(buf));
 			if (fprintf(out, "\troa %s max %u as %u;\n", buf,
@@ -75,10 +79,10 @@ output_bird1v6(FILE *out, struct vrp_tree *vrps, struct stats *st)
 }
 
 int
-output_bird2(FILE *out, struct vrp_tree *vrps, struct stats *st)
+output_bird2(FILE *out, struct vrp_tree *vrps, struct brk_tree *brks,
+    struct stats *st)
 {
 	extern		const char *bird_tablename;
-	char		 buf[64];
 	struct vrp	*v;
 	time_t		 now = time(NULL);
 
@@ -93,6 +97,8 @@ output_bird2(FILE *out, struct vrp_tree *vrps, struct stats *st)
 		return -1;
 
 	RB_FOREACH(v, vrp_tree, vrps) {
+		char buf[64];
+
 		if (v->afi == AFI_IPV4) {
 			ip_addr_print(&v->addr, v->afi, buf, sizeof(buf));
 			if (fprintf(out, "\troute %s max %u as %u;\n", buf,
@@ -106,6 +112,8 @@ output_bird2(FILE *out, struct vrp_tree *vrps, struct stats *st)
 		return -1;
 
 	RB_FOREACH(v, vrp_tree, vrps) {
+		char buf[64];
+
 		if (v->afi == AFI_IPV6) {
 			ip_addr_print(&v->addr, v->afi, buf, sizeof(buf));
 			if (fprintf(out, "\troute %s max %u as %u;\n", buf,

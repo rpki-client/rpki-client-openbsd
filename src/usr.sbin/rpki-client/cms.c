@@ -1,4 +1,4 @@
-/*	$OpenBSD: cms.c,v 1.8 2021/01/29 10:13:16 claudio Exp $ */
+/*	$OpenBSD: cms.c,v 1.8.2.1 2021/11/09 13:41:19 benno Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -35,37 +35,24 @@
  * Return the eContent as a string and set "rsz" to be its length.
  */
 unsigned char *
-cms_parse_validate(X509 **xp, const char *fn,
-    const char *oid, size_t *rsz)
+cms_parse_validate(X509 **xp, const char *fn, const unsigned char *der,
+    size_t derlen, const ASN1_OBJECT *oid, size_t *rsz)
 {
 	const ASN1_OBJECT	*obj;
 	ASN1_OCTET_STRING	**os = NULL;
-	BIO			*bio = NULL;
 	CMS_ContentInfo		*cms;
-	FILE			*f;
-	char			 buf[128];
-	int			 rc = 0, sz;
+	int			 rc = 0;
 	STACK_OF(X509)		*certs = NULL;
 	unsigned char		*res = NULL;
 
 	*rsz = 0;
 	*xp = NULL;
 
-	/*
-	 * This is usually fopen() failure, so let it pass through to
-	 * the handler, which will in turn ignore the entity.
-	 */
-	if ((f = fopen(fn, "rb")) == NULL) {
-		warn("%s", fn);
+	/* just fail for empty buffers, the warning was printed elsewhere */
+	if (der == NULL)
 		return NULL;
-	}
 
-	if ((bio = BIO_new_fp(f, BIO_CLOSE)) == NULL) {
-		cryptowarnx("%s: BIO_new_fp", fn);
-		return NULL;
-	}
-
-	if ((cms = d2i_CMS_bio(bio, NULL)) == NULL) {
+	if ((cms = d2i_CMS_ContentInfo(NULL, &der, derlen)) == NULL) {
 		cryptowarnx("%s: RFC 6488: failed CMS parse", fn);
 		goto out;
 	}
@@ -75,8 +62,8 @@ cms_parse_validate(X509 **xp, const char *fn,
 	 * Verify that the self-signage is correct.
 	 */
 
-	if (!CMS_verify(cms, NULL, NULL,
-	    NULL, NULL, CMS_NO_SIGNER_CERT_VERIFY)) {
+	if (!CMS_verify(cms, NULL, NULL, NULL, NULL,
+	    CMS_NO_SIGNER_CERT_VERIFY)) {
 		cryptowarnx("%s: RFC 6488: CMS not self-signed", fn);
 		goto out;
 	}
@@ -84,16 +71,18 @@ cms_parse_validate(X509 **xp, const char *fn,
 	/* RFC 6488 section 2.1.3.1: check the object's eContentType. */
 
 	obj = CMS_get0_eContentType(cms);
-	if ((sz = OBJ_obj2txt(buf, sizeof(buf), obj, 1)) < 0)
-		cryptoerrx("OBJ_obj2txt");
-
-	if ((size_t)sz >= sizeof(buf)) {
-		warnx("%s: RFC 6488 section 2.1.3.1: "
-		    "eContentType: OID too long", fn);
-		goto out;
-	} else if (strcmp(buf, oid)) {
+	if (obj == NULL) {
 		warnx("%s: RFC 6488 section 2.1.3.1: eContentType: "
-		    "unknown OID: %s, want %s", fn, buf, oid);
+		    "OID object is NULL", fn);
+		goto out;
+	}
+	if (OBJ_cmp(obj, oid) != 0) {
+		char buf[128], obuf[128];
+
+		OBJ_obj2txt(buf, sizeof(buf), obj, 1);
+		OBJ_obj2txt(obuf, sizeof(obuf), oid, 1);
+		warnx("%s: RFC 6488 section 2.1.3.1: eContentType: "
+		    "unknown OID: %s, want %s", fn, buf, obuf);
 		goto out;
 	}
 
@@ -133,7 +122,6 @@ cms_parse_validate(X509 **xp, const char *fn,
 
 	rc = 1;
 out:
-	BIO_free_all(bio);
 	sk_X509_free(certs);
 	CMS_ContentInfo_free(cms);
 
@@ -143,4 +131,62 @@ out:
 	}
 
 	return res;
+}
+
+/*
+ * Wrapper around ASN1_get_object() that preserves the current start
+ * state and returns a more meaningful value.
+ * Return zero on failure, non-zero on success.
+ */
+int
+ASN1_frame(const char *fn, size_t sz,
+	const unsigned char **cnt, long *cntsz, int *tag)
+{
+	int	 ret, pcls;
+
+	ret = ASN1_get_object(cnt, cntsz, tag, &pcls, sz);
+	if ((ret & 0x80)) {
+		cryptowarnx("%s: ASN1_get_object", fn);
+		return 0;
+	}
+	return ASN1_object_size((ret & 0x01) ? 2 : 0, *cntsz, *tag);
+}
+
+/*
+ * Check the version field in eContent.
+ * Returns -1 on failure, zero on success.
+ */
+int
+cms_econtent_version(const char *fn, const unsigned char **d, size_t dsz,
+	long *version)
+{
+	ASN1_INTEGER	*aint = NULL;
+	long		 plen;
+	int		 ptag, rc = -1;
+
+	if (!ASN1_frame(fn, dsz, d, &plen, &ptag))
+		goto out;
+	if (ptag != 0) {
+		warnx("%s: eContent version: expected explicit tag [0]", fn);
+		goto out;
+	}
+
+	aint = d2i_ASN1_INTEGER(NULL, d, plen);
+	if (aint == NULL) {
+		cryptowarnx("%s: eContent version: failed d2i_ASN1_INTEGER",
+		    fn);
+		goto out;
+	}
+
+	*version = ASN1_INTEGER_get(aint);
+	if (*version < 0) {
+		warnx("%s: eContent version: expected positive integer, got:"
+		    " %ld", fn, *version);
+		goto out;
+	}
+
+	rc = 0;
+out:
+	ASN1_INTEGER_free(aint);
+	return rc;
 }
