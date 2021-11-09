@@ -1,4 +1,4 @@
-/*	$OpenBSD: output.c,v 1.21 2021/03/02 09:08:59 claudio Exp $ */
+/*	$OpenBSD: output.c,v 1.21.2.1 2021/11/09 13:41:19 benno Exp $ */
 /*
  * Copyright (c) 2019 Theo de Raadt <deraadt@openbsd.org>
  *
@@ -64,7 +64,8 @@ static char	 output_name[PATH_MAX];
 static const struct outputs {
 	int	 format;
 	char	*name;
-	int	(*fn)(FILE *, struct vrp_tree *, struct stats *);
+	int	(*fn)(FILE *, struct vrp_tree *, struct brk_tree *,
+		    struct stats *);
 } outputs[] = {
 	{ FORMAT_OPENBGPD, "openbgpd", output_bgpd },
 	{ FORMAT_BIRD, "bird1v4", output_bird1v4 },
@@ -82,7 +83,7 @@ static void	 sig_handler(int);
 static void	 set_signal_handler(void);
 
 int
-outputfiles(struct vrp_tree *v, struct stats *st)
+outputfiles(struct vrp_tree *v, struct brk_tree *b, struct stats *st)
 {
 	int i, rc = 0;
 
@@ -101,7 +102,7 @@ outputfiles(struct vrp_tree *v, struct stats *st)
 			rc = 1;
 			continue;
 		}
-		if ((*outputs[i].fn)(fout, v, st) != 0) {
+		if ((*outputs[i].fn)(fout, v, b, st) != 0) {
 			warn("output for %s format failed", outputs[i].name);
 			fclose(fout);
 			output_cleantmp();
@@ -200,6 +201,7 @@ outputheader(FILE *out, struct stats *st)
 	char		hn[NI_MAXHOST], tbuf[80];
 	struct tm	*tp;
 	time_t		t;
+	size_t		i;
 
 	time(&t);
 	setenv("TZ", "UTC", 1);
@@ -210,20 +212,31 @@ outputheader(FILE *out, struct stats *st)
 
 	if (fprintf(out,
 	    "# Generated on host %s at %s\n"
-	    "# Processing time %lld seconds (%lld seconds user, %lld seconds system)\n"
+	    "# Processing time %lld seconds (%llds user, %llds system)\n"
 	    "# Route Origin Authorizations: %zu (%zu failed parse, %zu invalid)\n"
-	    "# Certificates: %zu (%zu failed parse, %zu invalid)\n"
-	    "# Trust Anchor Locators: %zu (%s)\n"
+	    "# BGPsec Router Certificates: %zu\n"
+	    "# Certificates: %zu (%zu invalid)\n",
+	    hn, tbuf, (long long)st->elapsed_time.tv_sec,
+	    (long long)st->user_time.tv_sec, (long long)st->system_time.tv_sec,
+	    st->roas, st->roas_fail, st->roas_invalid,
+	    st->brks, st->certs, st->certs_fail) < 0)
+		return -1;
+
+	if (fprintf(out,
+	    "# Trust Anchor Locators: %zu (%zu invalid) [", st->tals,
+	    talsz - st->tals) < 0)
+		return -1;
+	for (i = 0; i < talsz; i++)
+		if (fprintf(out, " %s", tals[i]) < 0)
+			return -1;
+
+	if (fprintf(out,
+	    " ]\n"
 	    "# Manifests: %zu (%zu failed parse, %zu stale)\n"
 	    "# Certificate revocation lists: %zu\n"
 	    "# Ghostbuster records: %zu\n"
 	    "# Repositories: %zu\n"
 	    "# VRP Entries: %zu (%zu unique)\n",
-	    hn, tbuf, (long long)st->elapsed_time.tv_sec,
-	    (long long)st->user_time.tv_sec, (long long)st->system_time.tv_sec,
-	    st->roas, st->roas_fail, st->roas_invalid,
-	    st->certs, st->certs_fail, st->certs_invalid,
-	    st->tals, st->talnames,
 	    st->mfts, st->mfts_fail, st->mfts_stale,
 	    st->crls,
 	    st->gbrs,

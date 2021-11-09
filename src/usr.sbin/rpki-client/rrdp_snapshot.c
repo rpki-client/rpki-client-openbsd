@@ -79,7 +79,7 @@ start_snapshot_elem(struct snapshot_xml *sxml, const char **attr)
 		}
 		PARSE_FAIL(p,
 		    "parse failed - non conforming "
-		    "attribute found in snapshot elem");
+		    "attribute '%s' found in snapshot elem", attr[i]);
 	}
 	if (!(has_xmlns && sxml->version && sxml->session_id && sxml->serial))
 		PARSE_FAIL(p,
@@ -193,9 +193,21 @@ static void
 snapshot_content_handler(void *data, const char *content, int length)
 {
 	struct snapshot_xml *sxml = data;
+	XML_Parser p = sxml->parser;
 
 	if (sxml->scope == SNAPSHOT_SCOPE_PUBLISH)
-		publish_add_content(sxml->pxml, content, length);
+		if (publish_add_content(sxml->pxml, content, length) == -1)
+			PARSE_FAIL(p, "parse failed - content too big");
+}
+
+static void
+snapshot_doctype_handler(void *data, const char *doctypeName,
+    const char *sysid, const char *pubid, int subset)
+{
+	struct snapshot_xml *sxml = data;
+	XML_Parser p = sxml->parser;
+
+	PARSE_FAIL(p, "parse failed - DOCTYPE not allowed");
 }
 
 struct snapshot_xml *
@@ -216,6 +228,8 @@ new_snapshot_xml(XML_Parser p, struct rrdp_session *rs, struct rrdp *r)
 	    snapshot_xml_elem_end);
 	XML_SetCharacterDataHandler(sxml->parser, snapshot_content_handler);
 	XML_SetUserData(sxml->parser, sxml);
+	XML_SetDoctypeDeclHandler(sxml->parser, snapshot_doctype_handler,
+	    NULL);
 
 	return sxml;
 }

@@ -1,4 +1,4 @@
-/*	$OpenBSD: mkdir.c,v 1.6 2021/03/29 04:01:17 tb Exp $	*/
+/*	$OpenBSD: mkdir.c,v 1.6.2.1 2021/11/09 13:41:19 benno Exp $	*/
 
 /*
  * Copyright (c) 1983, 1992, 1993
@@ -39,9 +39,7 @@
 
 /*
  * mkpath -- create directories.
- *	path     - path
- *	mode     - file mode of terminal directory
- *	dir_mode - file mode of intermediate directories
+ *	dir - path to create directories for
  */
 int
 mkpath(const char *dir)
@@ -53,6 +51,7 @@ mkpath(const char *dir)
 		return -1;
 
 	slash = path;
+
 	for (;;) {
 		slash += strspn(slash, "/");
 		slash += strcspn(slash, "/");
