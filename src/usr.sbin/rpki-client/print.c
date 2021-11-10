@@ -1,4 +1,4 @@
-/*	$OpenBSD: print.c,v 1.2 2021/10/25 14:07:56 claudio Exp $ */
+/*	$OpenBSD: print.c,v 1.2.2.1 2021/11/10 11:57:37 bluhm Exp $ */
 /*
  * Copyright (c) 2021 Claudio Jeker <claudio@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
