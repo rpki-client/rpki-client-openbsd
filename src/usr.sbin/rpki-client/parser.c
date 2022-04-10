@@ -1,4 +1,4 @@
-/*	$OpenBSD: parser.c,v 1.11.4.1 2021/11/09 13:40:32 benno Exp $ */
+/*	$OpenBSD: parser.c,v 1.11.4.2 2022/04/10 07:37:27 tb Exp $ */
 /*
  * Copyright (c) 2019 Claudio Jeker <claudio@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -376,8 +376,8 @@ proc_parser_crl(struct entity *entp, const unsigned char *der, size_t len)
 			warnx("%s: ASN1_time_parse failed", entp->file);
 			goto err;
 		}
-		if ((crl->expires = mktime(&expires_tm)) == -1)
-			errx(1, "%s: mktime failed", entp->file);
+		if ((crl->expires = timegm(&expires_tm)) == -1)
+			errx(1, "%s: timegm failed", entp->file);
 
 		if (RB_INSERT(crl_tree, &crlt, crl) != NULL) {
 			warnx("%s: duplicate AKI %s", entp->file, crl->aki);
