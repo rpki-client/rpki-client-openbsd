@@ -1,4 +1,4 @@
-/*	$OpenBSD: x509.c,v 1.21.6.1 2021/11/09 13:40:32 benno Exp $ */
+/*	$OpenBSD: x509.c,v 1.21.6.2 2022/04/10 07:37:27 tb Exp $ */
 /*
  * Copyright (c) 2021 Claudio Jeker <claudio@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -320,8 +320,8 @@ x509_get_expire(X509 *x, const char *fn, time_t *tt)
 		warnx("%s: ASN1_time_parse failed", fn);
 		return 0;
 	}
-	if ((expires = mktime(&expires_tm)) == -1)
-		errx(1, "%s: mktime failed", fn);
+	if ((expires = timegm(&expires_tm)) == -1)
+		errx(1, "%s: timegm failed", fn);
 
 	*tt = expires;
 	return 1;
