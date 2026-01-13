@@ -1,4 +1,4 @@
-/*	$OpenBSD: cert.c,v 1.158 2025/04/03 14:29:44 tb Exp $ */
+/*	$OpenBSD: cert.c,v 1.158.4.1 2026/01/13 08:37:17 tb Exp $ */
 /*
  * Copyright (c) 2022 Theo Buehler <tb@openbsd.org>
  * Copyright (c) 2021 Job Snijders <job@openbsd.org>
@@ -805,7 +805,6 @@ cert_parse_pre(const char *fn, const unsigned char *der, size_t len)
 {
 	struct cert		*cert;
 	const unsigned char	*oder;
-	size_t			 j;
 	int			 i, extsz;
 	X509			*x = NULL;
 	X509_EXTENSION		*ext = NULL;
@@ -991,12 +990,21 @@ cert_parse_pre(const char *fn, const unsigned char *der, size_t len)
 			warnx("%s: unexpected IP resources in BGPsec cert", fn);
 			goto out;
 		}
-		for (j = 0; j < cert->num_ases; j++) {
-			if (cert->ases[j].type == CERT_AS_INHERIT) {
-				warnx("%s: inherit elements not allowed in EE"
-				    " cert", fn);
-				goto out;
-			}
+		if (cert->num_ases == 0) {
+			warnx("%s: missing AS resources in BGPsec cert", fn);
+			goto out;
+		}
+		if (cert->num_ases == 1 &&
+		    cert->ases[0].type == CERT_AS_INHERIT) {
+			warnx("%s: inherit elements not allowed in "
+			    "BGPsec cert", fn);
+			goto out;
+		}
+		if (cert->num_ases != 1 ||
+		    cert->ases[0].type != CERT_AS_ID) {
+			warnx("%s: BGPsec certs with more than one "
+			    "AS number are not supported", fn);
+			goto out;
 		}
 		if (sia) {
 			warnx("%s: unexpected SIA extension in BGPsec cert",
