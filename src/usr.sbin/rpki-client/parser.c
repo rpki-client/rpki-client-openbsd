@@ -1,4 +1,4 @@
-/*	$OpenBSD: parser.c,v 1.169 2025/08/19 08:32:24 tb Exp $ */
+/*	$OpenBSD: parser.c,v 1.169.2.1 2026/01/13 08:36:01 tb Exp $ */
 /*
  * Copyright (c) 2019 Claudio Jeker <claudio@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -588,6 +588,13 @@ proc_parser_cert(char *file, const unsigned char *der, size_t len,
 	cert = cert_parse(file, der, len);
 	if (cert == NULL)
 		goto out;
+
+	if (cert->purpose != CERT_PURPOSE_CA &&
+	    cert->purpose != CERT_PURPOSE_BGPSEC_ROUTER) {
+		warnx("%s: %s not allowed in a manifest", file,
+		    purpose2str(cert->purpose));
+		goto out;
+	}
 
 	a = find_issuer(file, entp->certid, cert->aki, entp->mftaki);
 	if (a == NULL)
