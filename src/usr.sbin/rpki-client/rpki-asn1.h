@@ -1,4 +1,4 @@
-/* $OpenBSD: rpki-asn1.h,v 1.13 2026/02/16 23:23:50 jsg Exp $ */
+/* $OpenBSD: rpki-asn1.h,v 1.14 2026/04/07 11:52:21 job Exp $ */
 /*
  * Copyright (c) 2025 Job Snijders <job@openbsd.org>
  * Copyright (c) 2025 Theo Buehler <tb@openbsd.org>
@@ -43,7 +43,7 @@ DECLARE_ASN1_FUNCTIONS(ASProviderAttestation);
 
 /*
  * Canonical Cache Representation (CCR)
- * reference: TBD
+ * reference: draft-ietf-sidrops-rpki-ccr
  */
 
 extern ASN1_ITEM_EXP ContentInfo_it;
