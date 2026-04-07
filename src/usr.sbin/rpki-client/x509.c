@@ -1,4 +1,4 @@
-/*	$OpenBSD: x509.c,v 1.129 2026/04/07 10:59:19 tb Exp $ */
+/*	$OpenBSD: x509.c,v 1.130 2026/04/07 14:38:04 job Exp $ */
 /*
  * Copyright (c) 2022 Theo Buehler <tb@openbsd.org>
  * Copyright (c) 2021 Claudio Jeker <claudio@openbsd.org>
@@ -46,7 +46,7 @@ ASN1_OBJECT	*rsc_oid;	/* id-ct-signedChecklist */
 ASN1_OBJECT	*aspa_oid;	/* id-ct-ASPA */
 ASN1_OBJECT	*tak_oid;	/* id-ct-SignedTAL */
 ASN1_OBJECT	*spl_oid;	/* id-ct-signedPrefixList */
-ASN1_OBJECT	*ccr_oid;	/* CanonicalCacheRepresentation PEN OID */
+ASN1_OBJECT	*ccr_oid;	/* id-ct-rpkiCanonicalCacheRepresentation */
 
 static const struct {
 	const char	 *oid;
