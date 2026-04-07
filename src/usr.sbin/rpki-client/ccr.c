@@ -1,4 +1,4 @@
-/*	$OpenBSD: ccr.c,v 1.33 2026/01/29 18:25:29 tb Exp $ */
+/*	$OpenBSD: ccr.c,v 1.34 2026/04/07 14:38:04 job Exp $ */
 /*
  * Copyright (c) 2025 Job Snijders <job@openbsd.org>
  *
@@ -1597,7 +1597,7 @@ ccr_parse(const char *fn, const unsigned char *der, size_t len)
 		char buf[128];
 
 		OBJ_obj2txt(buf, sizeof(buf), ci->contentType, 1);
-		warnx("%s: unexpected OID: got %s, want 1.3.6.1.4.1.41948.828",
+		warnx("%s: unexpected OID: got %s, want 1.2.840.113549.1.9.16.1.54",
 		    fn, buf);
 		goto out;
 	}
