@@ -1,4 +1,4 @@
-/*	$OpenBSD: x509.c,v 1.128 2026/02/11 14:41:34 tb Exp $ */
+/*	$OpenBSD: x509.c,v 1.129 2026/04/07 10:59:19 tb Exp $ */
 /*
  * Copyright (c) 2022 Theo Buehler <tb@openbsd.org>
  * Copyright (c) 2021 Claudio Jeker <claudio@openbsd.org>
@@ -217,7 +217,7 @@ x509_inherits(X509 *x)
 	addrblk = X509_get_ext_d2i(x, NID_sbgp_ipAddrBlock, &crit, NULL);
 	if (addrblk == NULL) {
 		if (crit != -1)
-			warnx("error parsing ipAddrBlock");
+			warnx("error parsing ipAddrBlocks");
 		goto out;
 	}
 
@@ -266,7 +266,7 @@ x509_any_inherits(X509 *x)
 
 	addrblk = X509_get_ext_d2i(x, NID_sbgp_ipAddrBlock, &crit, NULL);
 	if (addrblk == NULL && crit != -1)
-		warnx("error parsing ipAddrBlock");
+		warnx("error parsing ipAddrBlocks");
 	if (X509v3_addr_inherits(addrblk))
 		rc = 1;
 

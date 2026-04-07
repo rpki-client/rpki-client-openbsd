@@ -1,4 +1,4 @@
-/*	$OpenBSD: extern.h,v 1.277 2026/02/03 16:21:37 tb Exp $ */
+/*	$OpenBSD: extern.h,v 1.278 2026/04/07 10:59:19 tb Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -824,7 +824,7 @@ int		 sbgp_addr(const char *, struct cert_ip *, size_t *,
 int		 sbgp_addr_range(const char *, struct cert_ip *, size_t *,
 		    enum afi, const IPAddressRange *);
 
-int		 sbgp_parse_ipaddrblk(const char *, const IPAddrBlocks *,
+int		 sbgp_parse_ipaddrblocks(const char *, const IPAddrBlocks *,
 		    struct cert_ip **, size_t *);
 
 /* Work with RFC 3779 AS numbers, ranges. */
@@ -841,7 +841,7 @@ int		 sbgp_as_id(const char *, struct cert_as *, size_t *,
 int		 sbgp_as_range(const char *, struct cert_as *, size_t *,
 		    const ASRange *);
 
-int		 sbgp_parse_assysnum(const char *, const ASIdentifiers *,
+int		 sbgp_parse_asids(const char *, const ASIdentifiers *,
 		    struct cert_as **, size_t *);
 
 /* Constraints-specific */
@@ -1037,8 +1037,8 @@ int	mkpathat(int, const char *);
 #define	CERTID_MAX		1000000
 
 /*
- * Maximum number of elements in the sbgp-ipAddrBlock (IP) and
- * sbgp-autonomousSysNum (AS) X.509v3 extension of CA/EE certificates.
+ * Maximum number of elements in the ipAddrBlocks (IP) and
+ * autonomousSysIds (AS) X.509v3 extension of certificates.
  */
 #define MAX_IP_SIZE		200000
 #define MAX_AS_SIZE		200000

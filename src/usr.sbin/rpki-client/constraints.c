@@ -1,4 +1,4 @@
-/*	$OpenBSD: constraints.c,v 1.5 2024/11/12 09:23:07 tb Exp $ */
+/*	$OpenBSD: constraints.c,v 1.6 2026/04/07 10:59:19 tb Exp $ */
 /*
  * Copyright (c) 2023 Job Snijders <job@openbsd.org>
  * Copyright (c) 2023 Theo Buehler <tb@openbsd.org>
@@ -452,13 +452,13 @@ constraints_parse_talid(int talid)
 		errx(1, "%s: failed to canonize AS numbers denylist", fn);
 
 	if (have_allow_as) {
-		if (!sbgp_parse_assysnum(fn, allow_asids, &allow_ases,
+		if (!sbgp_parse_asids(fn, allow_asids, &allow_ases,
 		    &num_allow_ases))
 			errx(1, "%s: failed to parse AS identifiers allowlist",
 			    fn);
 	}
 	if (have_deny_as) {
-		if (!sbgp_parse_assysnum(fn, deny_asids, &deny_ases,
+		if (!sbgp_parse_asids(fn, deny_asids, &deny_ases,
 		    &num_deny_as))
 			errx(1, "%s: failed to parse AS identifiers denylist",
 			    fn);
@@ -466,7 +466,7 @@ constraints_parse_talid(int talid)
 	if (have_allow_ips) {
 		constraints_normalize_ip_addrblocks(fn, &allow_addrs);
 
-		if (!sbgp_parse_ipaddrblk(fn, allow_addrs, &allow_ips,
+		if (!sbgp_parse_ipaddrblocks(fn, allow_addrs, &allow_ips,
 		    &num_allow_ips))
 			errx(1, "%s: failed to parse IP addresses allowlist",
 			    fn);
@@ -474,7 +474,7 @@ constraints_parse_talid(int talid)
 	if (have_deny_ips) {
 		constraints_normalize_ip_addrblocks(fn, &deny_addrs);
 
-		if (!sbgp_parse_ipaddrblk(fn, deny_addrs, &deny_ips,
+		if (!sbgp_parse_ipaddrblocks(fn, deny_addrs, &deny_ips,
 		    &num_deny_ips))
 			errx(1, "%s: failed to parse IP addresses denylist",
 			    fn);

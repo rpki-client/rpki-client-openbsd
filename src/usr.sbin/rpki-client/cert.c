@@ -1,4 +1,4 @@
-/*	$OpenBSD: cert.c,v 1.231 2026/04/03 02:41:03 tb Exp $ */
+/*	$OpenBSD: cert.c,v 1.232 2026/04/07 10:59:19 tb Exp $ */
 /*
  * Copyright (c) 2022,2025 Theo Buehler <tb@openbsd.org>
  * Copyright (c) 2021 Job Snijders <job@openbsd.org>
@@ -1118,7 +1118,7 @@ sbgp_addr_inherit(const char *fn, struct cert_ip *ips, size_t *num_ips,
 }
 
 int
-sbgp_parse_ipaddrblk(const char *fn, const IPAddrBlocks *addrblk,
+sbgp_parse_ipaddrblocks(const char *fn, const IPAddrBlocks *addrs,
     struct cert_ip **out_ips, size_t *out_num_ips)
 {
 	const IPAddressFamily	*af;
@@ -1128,20 +1128,19 @@ sbgp_parse_ipaddrblk(const char *fn, const IPAddrBlocks *addrblk,
 	struct cert_ip		*ips = NULL;
 	size_t			 num_ips = 0, num;
 	int			 ipv4_seen = 0, ipv6_seen = 0;
-	int			 i, j, ipaddrblocksz;
+	int			 i, j, addrsz;
 
 	assert(*out_ips == NULL && *out_num_ips == 0);
 
-	ipaddrblocksz = sk_IPAddressFamily_num(addrblk);
-	if (ipaddrblocksz != 1 && ipaddrblocksz != 2) {
+	addrsz = sk_IPAddressFamily_num(addrs);
+	if (addrsz != 1 && addrsz != 2) {
 		warnx("%s: RFC 6487 section 4.8.10: unexpected number of "
-		    "ipAddrBlocks (got %d, expected 1 or 2)",
-		    fn, ipaddrblocksz);
+		    "ipAddrBlocks (got %d, expected 1 or 2)", fn, addrsz);
 		goto out;
 	}
 
-	for (i = 0; i < ipaddrblocksz; i++) {
-		af = sk_IPAddressFamily_value(addrblk, i);
+	for (i = 0; i < addrsz; i++) {
+		af = sk_IPAddressFamily_value(addrs, i);
 
 		switch (af->ipAddressChoice->type) {
 		case IPAddressChoice_inherit:
@@ -1230,40 +1229,40 @@ sbgp_parse_ipaddrblk(const char *fn, const IPAddrBlocks *addrblk,
 }
 
 /*
- * Parse an sbgp-ipAddrBlock X509 extension, RFC 6487 4.8.10, with
+ * Parse an IP Resources X.509v3 extension, RFC 6487 4.8.10, with
  * syntax documented in RFC 3779 starting in section 2.2.
  * Returns zero on failure, non-zero on success.
  */
 static int
-sbgp_ipaddrblk(const char *fn, struct cert *cert, const X509_EXTENSION *ext)
+sbgp_ipaddrblocks(const char *fn, struct cert *cert, const X509_EXTENSION *ext)
 {
-	IPAddrBlocks	*addrblk = NULL;
+	IPAddrBlocks	*addrs = NULL;
 	int		 rc = 0;
 
 	if (!X509_EXTENSION_get_critical(ext)) {
-		warnx("%s: RFC 6487 section 4.8.10: sbgp-ipAddrBlock: "
+		warnx("%s: RFC 6487 section 4.8.10: ipAddrBlocks: "
 		    "extension not critical", fn);
 		goto out;
 	}
 
 	/* XXX - cast away const for OpenSSL 3 and LibreSSL */
-	if ((addrblk = X509V3_EXT_d2i((X509_EXTENSION *)ext)) == NULL) {
-		warnx("%s: RFC 6487 section 4.8.10: sbgp-ipAddrBlock: "
+	if ((addrs = X509V3_EXT_d2i((X509_EXTENSION *)ext)) == NULL) {
+		warnx("%s: RFC 6487 section 4.8.10: ipAddrBlocks: "
 		    "failed extension parse", fn);
 		goto out;
 	}
 
-	if (!sbgp_parse_ipaddrblk(fn, addrblk, &cert->ips, &cert->num_ips))
+	if (!sbgp_parse_ipaddrblocks(fn, addrs, &cert->ips, &cert->num_ips))
 		goto out;
 
 	if (cert->num_ips == 0) {
-		warnx("%s: RFC 6487 section 4.8.10: empty ipAddrBlock", fn);
+		warnx("%s: RFC 6487 section 4.8.10: empty ipAddrBlocks", fn);
 		goto out;
 	}
 
 	rc = 1;
  out:
-	IPAddrBlocks_free(addrblk);
+	IPAddrBlocks_free(addrs);
 	return rc;
 }
 
@@ -1376,7 +1375,7 @@ cert_has_one_as(const struct cert *cert)
 }
 
 int
-sbgp_parse_assysnum(const char *fn, const ASIdentifiers *asidentifiers,
+sbgp_parse_asids(const char *fn, const ASIdentifiers *asidentifiers,
     struct cert_as **out_as, size_t *out_num_ases)
 {
 	const ASIdOrRanges	*aors = NULL;
@@ -1387,13 +1386,13 @@ sbgp_parse_assysnum(const char *fn, const ASIdentifiers *asidentifiers,
 	assert(*out_as == NULL && *out_num_ases == 0);
 
 	if (asidentifiers->rdi != NULL) {
-		warnx("%s: RFC 6487 section 4.8.11: autonomousSysNum: "
+		warnx("%s: RFC 6487 section 4.8.11: autonomousSysIds: "
 		    "should not have RDI values", fn);
 		goto out;
 	}
 
 	if (asidentifiers->asnum == NULL) {
-		warnx("%s: RFC 6487 section 4.8.11: autonomousSysNum: "
+		warnx("%s: RFC 6487 section 4.8.11: autonomousSysIds: "
 		    "no AS number resource set", fn);
 		goto out;
 	}
@@ -1462,31 +1461,30 @@ sbgp_parse_assysnum(const char *fn, const ASIdentifiers *asidentifiers,
 }
 
 /*
- * Parse RFC 6487 4.8.11 X509v3 extension, with syntax documented in RFC
- * 3779 starting in section 3.2.
+ * Parse an AS Resources X.509v3 extension, RFC 6487 4.8.11, with
+ * syntax documented in RFC 3779 starting in section 3.2.
  * Returns zero on failure, non-zero on success.
  */
 static int
-sbgp_assysnum(const char *fn, struct cert *cert, const X509_EXTENSION *ext)
+sbgp_asids(const char *fn, struct cert *cert, const X509_EXTENSION *ext)
 {
 	ASIdentifiers		*asidentifiers = NULL;
 	int			 rc = 0;
 
 	if (!X509_EXTENSION_get_critical(ext)) {
-		warnx("%s: RFC 6487 section 4.8.11: autonomousSysNum: "
+		warnx("%s: RFC 6487 section 4.8.11: autonomousSysIds: "
 		    "extension not critical", fn);
 		goto out;
 	}
 
 	/* XXX - cast away const for OpenSSL 3 and LibreSSL */
 	if ((asidentifiers = X509V3_EXT_d2i((X509_EXTENSION *)ext)) == NULL) {
-		warnx("%s: RFC 6487 section 4.8.11: autonomousSysNum: "
+		warnx("%s: RFC 6487 section 4.8.11: autonomousSysIds: "
 		    "failed extension parse", fn);
 		goto out;
 	}
 
-	if (!sbgp_parse_assysnum(fn, asidentifiers, &cert->ases,
-	    &cert->num_ases))
+	if (!sbgp_parse_asids(fn, asidentifiers, &cert->ases, &cert->num_ases))
 		goto out;
 
 	rc = 1;
@@ -1589,13 +1587,13 @@ cert_parse_extensions(const char *fn, struct cert *cert)
 		case NID_sbgp_ipAddrBlock:
 			if (ip++ > 0)
 				goto dup;
-			if (!sbgp_ipaddrblk(fn, cert, ext))
+			if (!sbgp_ipaddrblocks(fn, cert, ext))
 				goto out;
 			break;
 		case NID_sbgp_autonomousSysNum:
 			if (as++ > 0)
 				goto dup;
-			if (!sbgp_assysnum(fn, cert, ext))
+			if (!sbgp_asids(fn, cert, ext))
 				goto out;
 			break;
 		default:
