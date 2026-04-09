@@ -1,4 +1,4 @@
-/*	$OpenBSD: as.c,v 1.17 2024/11/12 09:23:07 tb Exp $ */
+/*	$OpenBSD: as.c,v 1.18 2026/04/09 07:47:31 tb Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -72,8 +72,8 @@ as_check_overlap(const struct cert_as *as, const char *fn,
 					continue;
 				break;
 			case CERT_AS_RANGE:
-				if (ases->range.min > ases[i].id ||
-				    ases->range.max < ases[i].id)
+				if (as->range.min > ases[i].id ||
+				    as->range.max < ases[i].id)
 					continue;
 				break;
 			default:
