@@ -1,4 +1,4 @@
-/*	$OpenBSD: http.c,v 1.93 2025/03/11 14:53:03 job Exp $ */
+/*	$OpenBSD: http.c,v 1.93.4.1 2026/04/13 16:00:49 bluhm Exp $ */
 /*
  * Copyright (c) 2020 Nils Fisher <nils_fisher@hotmail.com>
  * Copyright (c) 2020 Claudio Jeker <claudio@openbsd.org>
@@ -1366,9 +1366,14 @@ http_parse_header(struct http_connection *conn, char *buf)
 
 	cp = buf;
 	/* empty line, end of header */
-	if (*cp == '\0')
+	if (*cp == '\0') {
+		/* check consistency of header fields */
+		if (http_isredirect(conn) && conn->redir_uri == NULL) {
+			warnx("%s: redirect with no location", conn->req->uri);
+			return -1;
+		}
 		return 0;
-	else if (strncasecmp(cp, CONTENTLEN, sizeof(CONTENTLEN) - 1) == 0) {
+	} else if (strncasecmp(cp, CONTENTLEN, sizeof(CONTENTLEN) - 1) == 0) {
 		cp += sizeof(CONTENTLEN) - 1;
 		cp += strspn(cp, " \t");
 		conn->iosz = strtonum(cp, 0, MAX_CONTENTLEN, &errstr);
