@@ -1,4 +1,4 @@
-/*	$OpenBSD: ccr.c,v 1.34 2026/04/07 14:38:04 job Exp $ */
+/*	$OpenBSD: ccr.c,v 1.35 2026/04/13 09:22:46 job Exp $ */
 /*
  * Copyright (c) 2025 Job Snijders <job@openbsd.org>
  *
@@ -832,14 +832,14 @@ ccr_vrp_cmp(const struct vrp *a, const struct vrp *b)
 		break;
 	}
 
-	if (a->addr.prefixlen < b->addr.prefixlen)
-		return 1;
 	if (a->addr.prefixlen > b->addr.prefixlen)
+		return 1;
+	if (a->addr.prefixlen < b->addr.prefixlen)
 		return -1;
 
-	if (a->maxlength < b->maxlength)
-		return 1;
 	if (a->maxlength > b->maxlength)
+		return 1;
+	if (a->maxlength < b->maxlength)
 		return -1;
 
 	return 0;
