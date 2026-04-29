@@ -1,4 +1,4 @@
-/*	$OpenBSD: parser.c,v 1.180 2026/04/27 22:23:27 job Exp $ */
+/*	$OpenBSD: parser.c,v 1.181 2026/04/29 11:14:11 tb Exp $ */
 /*
  * Copyright (c) 2019 Claudio Jeker <claudio@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -314,8 +314,12 @@ proc_parser_mft_check(const char *fn, struct mft *p)
 
 		if (!valid) {
 			/* silently skip not-existing unknown files */
-			if (m->type == RTYPE_INVALID && noent == 2)
-				continue;
+			if (m->type == RTYPE_INVALID) {
+				if (noent == 2)
+					continue;
+				if (noop && noent == 1)
+					continue;
+			}
 			warnx("%s#%s: bad message digest for %s", fn,
 			    p->seqnum, m->file);
 			rc = 0;
